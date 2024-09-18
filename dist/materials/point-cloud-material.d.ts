@@ -43,6 +43,7 @@ export interface IPointCloudMaterialUniforms {
     orthoHeight: IUniform<number>;
     orthoWidth: IUniform<number>;
     useOrthographicCamera: IUniform<boolean>;
+    far: IUniform<number>;
     size: IUniform<number>;
     spacing: IUniform<number>;
     toModel: IUniform<number[]>;
@@ -97,6 +98,7 @@ export declare class PointCloudMaterial extends RawShaderMaterial {
     orthoWidth: number;
     orthoHeight: number;
     useOrthographicCamera: boolean;
+    far: number;
     size: number;
     spacing: number;
     transition: number;
@@ -126,6 +128,7 @@ export declare class PointCloudMaterial extends RawShaderMaterial {
     highlightPoint: boolean;
     inputColorEncoding: ColorEncoding;
     outputColorEncoding: ColorEncoding;
+    private useLogDepth;
     attributes: {
         position: {
             type: string;

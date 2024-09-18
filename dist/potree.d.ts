@@ -16,7 +16,7 @@ export declare class Potree implements IPotree {
     private _pointBudget;
     private _rendererSize;
     maxNumNodesLoading: number;
-    features: {
+    get features(): {
         SHADER_INTERPOLATION: boolean;
         SHADER_SPLATS: boolean;
         SHADER_EDL: boolean;
