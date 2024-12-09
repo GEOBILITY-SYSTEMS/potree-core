@@ -75,13 +75,8 @@ uniform sampler2D depthMap;
 	uniform float highlightedPointScale;
 #endif
 
-#ifdef new_format
-	in vec4 rgba;
-	out vec4 vColor;
-#else
-	in vec3 color;
-	out vec3 vColor;
-#endif
+in vec4 rgba;
+out vec3 vColor;
 
 #if !defined(color_type_point_index)
 	out float vOpacity;
@@ -288,22 +283,18 @@ float getContrastFactor(float contrast) {
 	return (1.0158730158730156 * (contrast + 1.0)) / (1.0158730158730156 - contrast);
 }
 
-#ifndef new_format
-
 vec3 getRGB() {
 	#if defined(use_rgb_gamma_contrast_brightness)
-	  vec3 rgb = color;
+	  vec3 rgb = rgba.rgb;
 		rgb = pow(rgb, vec3(rgbGamma));
 		rgb = rgb + rgbBrightness;
 		rgb = (rgb - 0.5) * getContrastFactor(rgbContrast) + 0.5;
 		rgb = clamp(rgb, 0.0, 1.0);
 		return rgb;
 	#else
-		return color;
+		return rgba.rgb;
 	#endif
 }
-
-#endif
 
 float getIntensity() {
 	float w = (intensity - intensityRange.x) / (intensityRange.y - intensityRange.x);
@@ -349,8 +340,6 @@ vec3 getSourceID() {
 	return texture(gradient, vec2(w, 1.0 - w)).rgb;
 }
 
-#ifndef new_format
-
 vec3 getCompositeColor() {
 	vec3 c;
 	float w;
@@ -383,35 +372,18 @@ vec3 getCompositeColor() {
 	return c;
 }
 
-#endif
-
-#ifdef new_format
-	vec4 fromLinear(vec4 linearRGB) {
-		bvec4 cutoff = lessThan(linearRGB, vec4(0.0031308));
-		vec4 higher = vec4(1.055)*pow(linearRGB, vec4(1.0/2.4)) - vec4(0.055);
-		vec4 lower = linearRGB * vec4(12.92);
-		return mix(higher, lower, cutoff);
-	} 
-	vec4 toLinear(vec4 sRGB) {
-		bvec4 cutoff = lessThan(sRGB, vec4(0.04045));
-		vec4 higher = pow((sRGB + vec4(0.055))/vec4(1.055), vec4(2.4));
-		vec4 lower = sRGB/vec4(12.92);
-		return mix(higher, lower, cutoff);
-	}
-#else
-	vec3 fromLinear(vec3 linearRGB) {
-		bvec3 cutoff = lessThan(linearRGB, vec3(0.0031308));
-		vec3 higher = vec3(1.055)*pow(linearRGB, vec3(1.0/2.4)) - vec3(0.055);
-		vec3 lower = linearRGB * vec3(12.92);
-		return mix(higher, lower, cutoff);
-	}
-	vec3 toLinear(vec3 sRGB) {
-		bvec3 cutoff = lessThan(sRGB, vec3(0.04045));
-		vec3 higher = pow((sRGB + vec3(0.055))/vec3(1.055), vec3(2.4));
-		vec3 lower = sRGB/vec3(12.92);
-		return mix(higher, lower, cutoff);
-	}
-#endif
+vec3 fromLinear(vec3 linearRGB) {
+	bvec3 cutoff = lessThan(linearRGB, vec3(0.0031308));
+	vec3 higher = vec3(1.055)*pow(linearRGB, vec3(1.0/2.4)) - vec3(0.055);
+	vec3 lower = linearRGB * vec3(12.92);
+	return mix(higher, lower, cutoff);
+}
+vec3 toLinear(vec3 sRGB) {
+	bvec3 cutoff = lessThan(sRGB, vec3(0.04045));
+	vec3 higher = pow((sRGB + vec3(0.055))/vec3(1.055), vec3(2.4));
+	vec3 lower = sRGB/vec3(12.92);
+	return mix(higher, lower, cutoff);
+}
 
 void main() {
 	vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
@@ -513,9 +485,8 @@ void main() {
 	// ---------------------
 	// POINT COLOR
 	// ---------------------	
-	#ifdef new_format
-		vColor = rgba;
-	#elif defined color_type_rgb
+
+	#ifdef color_type_rgb
 		vColor = getRGB();
 	#elif defined color_type_height
 		vColor = getElevation();

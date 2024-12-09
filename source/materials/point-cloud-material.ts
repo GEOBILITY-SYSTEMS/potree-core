@@ -51,7 +51,6 @@ export interface IPointCloudMaterialParameters {
   minSize: number;
   maxSize: number;
   treeType: TreeType;
-  newFormat: boolean;
 }
 
 export interface IPointCloudMaterialUniforms {
@@ -362,8 +361,6 @@ export class PointCloudMaterial extends RawShaderMaterial
   	indices: {type: 'fv', value: []}
   };
 
-  newFormat: boolean;
-
   constructor(parameters: Partial<IPointCloudMaterialParameters> = {}) 
   {
   	super();
@@ -377,8 +374,6 @@ export class PointCloudMaterial extends RawShaderMaterial
   	this.size = getValid(parameters.size, 1.0);
   	this.minSize = getValid(parameters.minSize, 2.0);
   	this.maxSize = getValid(parameters.maxSize, 50.0);
-
-  	this.newFormat = Boolean(parameters.newFormat);
 
   	this.classification = DEFAULT_CLASSIFICATION;
 
@@ -528,12 +523,6 @@ export class PointCloudMaterial extends RawShaderMaterial
 
   	define('MAX_POINT_LIGHTS 0');
   	define('MAX_DIR_LIGHTS 0');
-
-  	if (this.newFormat) 
-  	{
-  		define ('new_format');
-  	}
-
 
   	// If '#version 300 es' exists as a line in shaderSrc, remove it and add it as the first element in the parts array
   	const versionLine = shaderSrc.match(/^\s*#version\s+300\s+es\s*\n/);
