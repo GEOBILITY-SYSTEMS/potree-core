@@ -308,7 +308,7 @@ float getIntensity() {
 
 vec3 getElevation() {
 	vec4 world = modelMatrix * vec4( position, 1.0 );
-	float w = (world.z - heightMin) / (heightMax-heightMin);
+	float w = (world.y - heightMin) / (heightMax-heightMin);
 	vec3 cElevation = texture(gradient, vec2(w,1.0-w)).rgb;
 	
 	return cElevation;
@@ -520,7 +520,7 @@ void main() {
 	#elif defined color_type_normal
 		vColor = (modelMatrix * vec4(normal, 0.0)).xyz;
 	#elif defined color_type_phong
-		vColor = color;
+		vColor = getRGB();
 	#elif defined color_type_composite
 		vColor = getCompositeColor();
 	#endif

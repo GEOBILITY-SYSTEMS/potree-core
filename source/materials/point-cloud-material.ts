@@ -104,6 +104,9 @@ export interface IPointCloudMaterialUniforms {
   highlightedPointColor: IUniform<Vector4>;
   enablePointHighlighting: IUniform<boolean>;
   highlightedPointScale: IUniform<number>;
+  emissive: IUniform<[number, number, number]>;
+  ambientLightColor: IUniform<[number, number, number]>;
+  ambient: IUniform<number>;
 }
 
 const TREE_TYPE_DEFS = {
@@ -241,7 +244,10 @@ export class PointCloudMaterial extends RawShaderMaterial
 		highlightedPointCoordinate: makeUniform('fv', new Vector3()),
 		highlightedPointColor: makeUniform('fv', DEFAULT_HIGHLIGHT_COLOR.clone()),
 		enablePointHighlighting: makeUniform('b', true),
-		highlightedPointScale: makeUniform('f', 2.0)
+		highlightedPointScale: makeUniform('f', 2.0),
+		emissive: makeUniform('fv', [0, 0, 0] as [number, number, number]),
+		ambientLightColor: makeUniform('fv', [1, 1, 1] as [number, number, number]),
+		ambient: makeUniform('f', 1.0),
 	};
 
   @uniform('bbSize') bbSize!: [number, number, number];
@@ -319,6 +325,12 @@ export class PointCloudMaterial extends RawShaderMaterial
   @uniform('enablePointHighlighting') enablePointHighlighting!: boolean;
 
   @uniform('highlightedPointScale') highlightedPointScale!: number;
+
+  @uniform('emissive') emissive!: [number, number, number];
+ 
+  @uniform('ambientLightColor') ambientLightColor!: [number, number, number];
+  
+  @uniform('ambient') ambient!: number;
 
   // Declare PointCloudMaterial attributes that need shader updates upon change, and set default values.
   @requiresShaderUpdate() useClipBox: boolean = false;

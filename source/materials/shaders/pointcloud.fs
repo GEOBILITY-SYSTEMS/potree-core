@@ -17,6 +17,10 @@ uniform float screenWidth;
 uniform float screenHeight;
 uniform float far;
 
+uniform vec3 emissive;
+uniform vec3 ambientLightColor;
+uniform float ambient;
+
 uniform sampler2D depthMap;
 
 out vec4 fragColor;
@@ -81,6 +85,19 @@ void main() {
 		}
 	#endif
 
+	#if defined weighted_splats
+		float wx = 2.0 * length(2.0 * gl_PointCoord - 1.0);
+		float w = exp(-wx * wx * 0.5);
+		fragColor.rgb = fragColor.rgb * w;
+		fragColor.a = w;
+	#else
+		#if defined(color_type_point_index)
+			fragColor = vec4(color, pcIndex / 255.0);
+		#else
+			fragColor = vec4(color, vOpacity);
+		#endif
+	#endif
+
 	#if defined(color_type_phong)
 		#if MAX_POINT_LIGHTS > 0 || MAX_DIR_LIGHTS > 0
 			vec3 normal = normalize( vNormal );
@@ -107,7 +124,7 @@ void main() {
 
 				lVector = normalize( lVector );
 
-						// diffuse
+				// diffuse
 
 				float dotProduct = dot( normal, lVector );
 
@@ -151,7 +168,7 @@ void main() {
 				vec4 lDirection = viewMatrix * vec4( directionalLightDirection[ i ], 0.0 );
 				vec3 dirVector = normalize( lDirection.xyz );
 
-						// diffuse
+				// diffuse
 
 				float dotProduct = dot( normal, dirVector );
 
@@ -203,19 +220,6 @@ void main() {
 		
 		fragColor.xyz = fragColor.xyz * ( emissive + totalDiffuse + ambientLightColor * ambient ) + totalSpecular;
 
-	#endif
-	
-	#if defined weighted_splats
-		float wx = 2.0 * length(2.0 * gl_PointCoord - 1.0);
-		float w = exp(-wx * wx * 0.5);
-		fragColor.rgb = fragColor.rgb * w;
-		fragColor.a = w;
-	#else
-		#if defined(color_type_point_index)
-			fragColor = vec4(color, pcIndex / 255.0);
-		#else
-			fragColor = vec4(color, vOpacity);
-		#endif
 	#endif
 
 	// Adjust position and compute depth
