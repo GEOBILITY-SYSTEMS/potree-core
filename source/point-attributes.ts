@@ -11,6 +11,8 @@ export enum PointAttributeName {
   NORMAL_SPHEREMAPPED = 8,
   NORMAL_OCT16 = 9,
   NORMAL = 10,
+  RETURN_NUMBER = 11,
+  NUMBER_OF_RETURNS = 12,
 }
 
 export interface PointAttributeType {
@@ -107,7 +109,17 @@ export const POINT_ATTRIBUTES = {
 		POINT_ATTRIBUTE_TYPES.DATA_TYPE_UINT8,
 		2,
 	),
-	NORMAL: makePointAttribute(PointAttributeName.NORMAL, POINT_ATTRIBUTE_TYPES.DATA_TYPE_FLOAT, 3)
+	NORMAL: makePointAttribute(PointAttributeName.NORMAL, POINT_ATTRIBUTE_TYPES.DATA_TYPE_FLOAT, 3),
+	RETURN_NUMBER: makePointAttribute(
+		PointAttributeName.RETURN_NUMBER,
+		POINT_ATTRIBUTE_TYPES.DATA_TYPE_UINT8,
+		1,
+	),
+	NUMBER_OF_RETURNS: makePointAttribute(
+		PointAttributeName.NUMBER_OF_RETURNS,
+		POINT_ATTRIBUTE_TYPES.DATA_TYPE_UINT8,
+		1,
+	),
 };
 
 export type PointAttributeStringName = keyof typeof POINT_ATTRIBUTES;
