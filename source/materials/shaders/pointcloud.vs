@@ -506,12 +506,12 @@ void main() {
 	#elif defined color_type_color
 		vColor = uColor;
 	#elif defined color_type_lod
-	float w = getLOD() / 10.0;
-	vColor = texture(gradient, vec2(w, 1.0 - w)).rgb;
+		float w = getLOD() / 10.0;
+		vColor = texture(gradient, vec2(w, 1.0 - w)).rgb;
 	#elif defined color_type_point_index
 		vColor = indices.rgb;
 	#elif defined color_type_classification
-	  vec4 cl = getClassification(); 
+		vec4 cl = getClassification(); 
 		vColor = cl.rgb;
 	#elif defined color_type_return_number
 		vColor = getReturnNumber();
