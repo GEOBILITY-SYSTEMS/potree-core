@@ -26,7 +26,7 @@ export declare class PointCloudOctree extends PointCloudTree {
     showBoundingBox: boolean;
     private visibleBounds;
     private picker;
-    constructor(potree: IPotree, pcoGeometry: PCOGeometry, material?: PointCloudMaterial);
+    constructor(potree: IPotree, pcoGeometry: PCOGeometry);
     private initMaterial;
     dispose(): void;
     get pointSizeType(): PointSizeType;

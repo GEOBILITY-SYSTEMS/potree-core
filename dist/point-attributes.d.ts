@@ -9,7 +9,9 @@ export declare enum PointAttributeName {
     CLASSIFICATION = 7,
     NORMAL_SPHEREMAPPED = 8,
     NORMAL_OCT16 = 9,
-    NORMAL = 10
+    NORMAL = 10,
+    RETURN_NUMBER = 11,
+    NUMBER_OF_RETURNS = 12
 }
 export interface PointAttributeType {
     ordinal: number;
@@ -39,6 +41,8 @@ export declare const POINT_ATTRIBUTES: {
     NORMAL_SPHEREMAPPED: IPointAttribute;
     NORMAL_OCT16: IPointAttribute;
     NORMAL: IPointAttribute;
+    RETURN_NUMBER: IPointAttribute;
+    NUMBER_OF_RETURNS: IPointAttribute;
 };
 export type PointAttributeStringName = keyof typeof POINT_ATTRIBUTES;
 export declare class PointAttributes implements IPointAttributes {

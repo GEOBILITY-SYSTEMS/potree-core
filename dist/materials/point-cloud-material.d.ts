@@ -10,7 +10,6 @@ export interface IPointCloudMaterialParameters {
     minSize: number;
     maxSize: number;
     treeType: TreeType;
-    newFormat: boolean;
 }
 export interface IPointCloudMaterialUniforms {
     bbSize: IUniform<[number, number, number]>;
@@ -63,6 +62,9 @@ export interface IPointCloudMaterialUniforms {
     highlightedPointColor: IUniform<Vector4>;
     enablePointHighlighting: IUniform<boolean>;
     highlightedPointScale: IUniform<number>;
+    emissive: IUniform<[number, number, number]>;
+    ambientLightColor: IUniform<[number, number, number]>;
+    ambient: IUniform<number>;
 }
 export declare class PointCloudMaterial extends RawShaderMaterial {
     private static helperVec3;
@@ -115,6 +117,9 @@ export declare class PointCloudMaterial extends RawShaderMaterial {
     highlightedPointColor: Vector4;
     enablePointHighlighting: boolean;
     highlightedPointScale: number;
+    emissive: [number, number, number];
+    ambientLightColor: [number, number, number];
+    ambient: number;
     useClipBox: boolean;
     weighted: boolean;
     pointColorType: PointColorType;
@@ -167,7 +172,6 @@ export declare class PointCloudMaterial extends RawShaderMaterial {
             value: any[];
         };
     };
-    newFormat: boolean;
     constructor(parameters?: Partial<IPointCloudMaterialParameters>);
     dispose(): void;
     clearVisibleNodeTextureOffsets(): void;
