@@ -51,7 +51,6 @@ export interface IPointCloudMaterialParameters {
   minSize: number;
   maxSize: number;
   treeType: TreeType;
-  newFormat: boolean;
 }
 
 export interface IPointCloudMaterialUniforms {
@@ -105,6 +104,9 @@ export interface IPointCloudMaterialUniforms {
   highlightedPointColor: IUniform<Vector4>;
   enablePointHighlighting: IUniform<boolean>;
   highlightedPointScale: IUniform<number>;
+  emissive: IUniform<[number, number, number]>;
+  ambientLightColor: IUniform<[number, number, number]>;
+  ambient: IUniform<number>;
 }
 
 const TREE_TYPE_DEFS = {
@@ -242,7 +244,10 @@ export class PointCloudMaterial extends RawShaderMaterial
 		highlightedPointCoordinate: makeUniform('fv', new Vector3()),
 		highlightedPointColor: makeUniform('fv', DEFAULT_HIGHLIGHT_COLOR.clone()),
 		enablePointHighlighting: makeUniform('b', true),
-		highlightedPointScale: makeUniform('f', 2.0)
+		highlightedPointScale: makeUniform('f', 2.0),
+		emissive: makeUniform('fv', [0, 0, 0] as [number, number, number]),
+		ambientLightColor: makeUniform('fv', [1, 1, 1] as [number, number, number]),
+		ambient: makeUniform('f', 1.0),
 	};
 
   @uniform('bbSize') bbSize!: [number, number, number];
@@ -321,6 +326,12 @@ export class PointCloudMaterial extends RawShaderMaterial
 
   @uniform('highlightedPointScale') highlightedPointScale!: number;
 
+  @uniform('emissive') emissive!: [number, number, number];
+ 
+  @uniform('ambientLightColor') ambientLightColor!: [number, number, number];
+  
+  @uniform('ambient') ambient!: number;
+
   // Declare PointCloudMaterial attributes that need shader updates upon change, and set default values.
   @requiresShaderUpdate() useClipBox: boolean = false;
 
@@ -362,8 +373,6 @@ export class PointCloudMaterial extends RawShaderMaterial
   	indices: {type: 'fv', value: []}
   };
 
-  newFormat: boolean;
-
   constructor(parameters: Partial<IPointCloudMaterialParameters> = {}) 
   {
   	super();
@@ -377,8 +386,6 @@ export class PointCloudMaterial extends RawShaderMaterial
   	this.size = getValid(parameters.size, 1.0);
   	this.minSize = getValid(parameters.minSize, 2.0);
   	this.maxSize = getValid(parameters.maxSize, 50.0);
-
-  	this.newFormat = Boolean(parameters.newFormat);
 
   	this.classification = DEFAULT_CLASSIFICATION;
 
@@ -528,12 +535,6 @@ export class PointCloudMaterial extends RawShaderMaterial
 
   	define('MAX_POINT_LIGHTS 0');
   	define('MAX_DIR_LIGHTS 0');
-
-  	if (this.newFormat) 
-  	{
-  		define ('new_format');
-  	}
-
 
   	// If '#version 300 es' exists as a line in shaderSrc, remove it and add it as the first element in the parts array
   	const versionLine = shaderSrc.match(/^\s*#version\s+300\s+es\s*\n/);

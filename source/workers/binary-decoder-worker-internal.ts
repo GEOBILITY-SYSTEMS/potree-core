@@ -87,7 +87,6 @@ export function handleMessage(event: MessageEvent)
 		indices: indices
 	};
 
-	// console.log('old', message)
 	postMessage(message, ctx.transferables as any);
 }
 
@@ -137,6 +136,10 @@ function decodePointAttribute(attribute: IPointAttribute, ctx: Ctx): DecodedAttr
 		return decodeNormalOct16(attribute, ctx);
 	case PointAttributeName.NORMAL:
 		return decodeNormal(attribute, ctx);
+	case PointAttributeName.RETURN_NUMBER:
+		return decodeReturnNumber(attribute, ctx);
+	case PointAttributeName.NUMBER_OF_RETURNS:
+		return decodeNumberOfReturns(attribute, ctx);
 	default:
 		return undefined;
 	}
@@ -321,3 +324,21 @@ function decodeNormal(attribute: IPointAttribute, ctx: Ctx): DecodedAttribute
 
 	return {buffer: buffer, attribute: attribute};
 }
+
+function decodeReturnNumber(attribute: IPointAttribute, ctx: Ctx): DecodedAttribute {
+	const buffer = new ArrayBuffer(ctx.numPoints);
+	const returnNumbers = new Uint8Array(buffer);
+	for (let j = 0; j < ctx.numPoints; j++) {
+	  returnNumbers[j] = ctx.data.getUint8(ctx.currentOffset + j * ctx.pointAttributes.byteSize);
+	}
+	return {buffer: buffer, attribute: attribute};
+  }
+  
+  function decodeNumberOfReturns(attribute: IPointAttribute, ctx: Ctx): DecodedAttribute {
+	const buffer = new ArrayBuffer(ctx.numPoints);
+	const numberOfReturns = new Uint8Array(buffer);
+	for (let j = 0; j < ctx.numPoints; j++) {
+	  numberOfReturns[j] = ctx.data.getUint8(ctx.currentOffset + j * ctx.pointAttributes.byteSize);
+	}
+	return {buffer: buffer, attribute: attribute};
+  }

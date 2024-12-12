@@ -17,6 +17,10 @@ uniform float screenWidth;
 uniform float screenHeight;
 uniform float far;
 
+uniform vec3 emissive;
+uniform vec3 ambientLightColor;
+uniform float ambient;
+
 uniform sampler2D depthMap;
 
 out vec4 fragColor;
@@ -25,11 +29,7 @@ out vec4 fragColor;
 	uniform vec4 highlightedPointColor;
 #endif
 
-#ifdef new_format
-	in vec4 vColor;
-#else
-	in vec3 vColor;
-#endif
+in vec3 vColor;
 
 #if !defined(color_type_point_index)
 	in float vOpacity;
@@ -61,15 +61,8 @@ float specularStrength = 1.0;
 
 void main() {
 
-	#ifdef new_format
-		// set actualColor vec3 from vec4 vColor
-		vec3 actualColor = vColor.xyz;
-	#else
-		// set actualColor RGB from the XYZ of vColor
-		vec3 actualColor = vColor;
-	#endif
 	
-	vec3 color = actualColor;
+	vec3 color = vColor;
 	float depth = gl_FragCoord.z;
 
 	#if defined(circle_point_shape) || defined(paraboloid_point_shape) || defined (weighted_splats)
@@ -90,6 +83,19 @@ void main() {
 		if(vLinearDepth > sDepth + vRadius + blendDepthSupplement){
 			discard;
 		}
+	#endif
+
+	#if defined weighted_splats
+		float wx = 2.0 * length(2.0 * gl_PointCoord - 1.0);
+		float w = exp(-wx * wx * 0.5);
+		fragColor.rgb = fragColor.rgb * w;
+		fragColor.a = w;
+	#else
+		#if defined(color_type_point_index)
+			fragColor = vec4(color, pcIndex / 255.0);
+		#else
+			fragColor = vec4(color, vOpacity);
+		#endif
 	#endif
 
 	#if defined(color_type_phong)
@@ -118,7 +124,7 @@ void main() {
 
 				lVector = normalize( lVector );
 
-						// diffuse
+				// diffuse
 
 				float dotProduct = dot( normal, lVector );
 
@@ -162,7 +168,7 @@ void main() {
 				vec4 lDirection = viewMatrix * vec4( directionalLightDirection[ i ], 0.0 );
 				vec3 dirVector = normalize( lDirection.xyz );
 
-						// diffuse
+				// diffuse
 
 				float dotProduct = dot( normal, dirVector );
 
@@ -214,19 +220,6 @@ void main() {
 		
 		fragColor.xyz = fragColor.xyz * ( emissive + totalDiffuse + ambientLightColor * ambient ) + totalSpecular;
 
-	#endif
-	
-	#if defined weighted_splats
-		float wx = 2.0 * length(2.0 * gl_PointCoord - 1.0);
-		float w = exp(-wx * wx * 0.5);
-		fragColor.rgb = fragColor.rgb * w;
-		fragColor.a = w;
-	#else
-		#if defined(color_type_point_index)
-			fragColor = vec4(color, pcIndex / 255.0);
-		#else
-			fragColor = vec4(color, vOpacity);
-		#endif
 	#endif
 
 	// Adjust position and compute depth
