@@ -426,7 +426,7 @@ void main() {
 			pointSize = size * spacing * projFactor;
 		}
 	#elif defined adaptive_point_size
-		float worldSpaceSize = 2.0 * size * spacing / getPointSizeAttenuation();
+		float worldSpaceSize = 2.0 * size * 14.631031484375002 / getPointSizeAttenuation();
 		if(useOrthographicCamera) {
 			pointSize = (worldSpaceSize / orthoWidth) * screenWidth;
 		} else {
