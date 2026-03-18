@@ -6,6 +6,24 @@ import {OctreeGeometryNode} from './OctreeGeometryNode';
 import {OctreeGeometry} from './OctreeGeometry';
 import {RequestManager} from './RequestManager';
 
+const ATTRIBUTE_NAME_ALIASES: {[key: string]: string} = {
+	'rgb': 'rgba',
+	'returnnumber': 'returnNumber',
+	'numberofreturns': 'numberOfReturns',
+	'pointsourceid': 'pointSourceID'
+};
+
+function normalizeAttributeAliasKey(name: string): string
+{
+	return name.toLowerCase().replace(/[\s_-]+/g, '');
+}
+
+function canonicalizeAttributeName(name: string): string
+{
+	const normalizedName = normalizeAttributeAliasKey(name);
+	return ATTRIBUTE_NAME_ALIASES[normalizedName] ? ATTRIBUTE_NAME_ALIASES[normalizedName] : name;
+}
+
 /**
  * NodeLoader is responsible for loading the geometry of octree nodes.
  */
@@ -412,16 +430,13 @@ export class OctreeLoader
 
 		let attributes = new PointAttributes();
 
-		// Replacements object for string to string
-		let replacements: {[key: string]: string} = {'rgb': 'rgba'};
-
 		for (const jsonAttribute of jsonAttributes) 
 		{
 			let {name, numElements, min, max} = jsonAttribute;
 
 			let type = typenameTypeattributeMap[jsonAttribute.type]; // Fix the typing, currently jsonAttribute has type 'never'
 
-			let potreeAttributeName = replacements[name] ? replacements[name] : name;
+			let potreeAttributeName = canonicalizeAttributeName(name);
 
 			let attribute = new PointAttribute(potreeAttributeName, type, numElements);
 

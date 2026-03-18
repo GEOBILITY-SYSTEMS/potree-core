@@ -1,15 +1,19 @@
 import {
 	AdditiveBlending,
+	AmbientLight,
 	BufferGeometry,
 	Camera,
 	Color,
+	DirectionalLight,
 	GLSL3,
 	LessEqualDepth,
+	Matrix3,
 	Material,
 	NearestFilter,
 	NoBlending,
 	OrthographicCamera,
 	PerspectiveCamera,
+	PointLight,
 	RawShaderMaterial,
 	Scene,
 	Texture,
@@ -93,6 +97,22 @@ export interface IPointCloudMaterialUniforms {
 	blendDepthSupplement: IUniform<number>;
 	/** Hardness factor for blending operations */
 	blendHardness: IUniform<number>;
+	/** Summed ambient light color contribution */
+	ambientLightColor: IUniform<[number, number, number]>;
+	/** Number of active directional lights used by the point shader */
+	numDirectionalLights: IUniform<number>;
+	/** Number of active point lights used by the point shader */
+	numPointLights: IUniform<number>;
+	/** Directional light directions in view space (xyz triplets) */
+	directionalLightDirections: IUniform<Float32Array>;
+	/** Directional light colors/intensities (rgb triplets) */
+	directionalLightColors: IUniform<Float32Array>;
+	/** Point light positions in view space (xyz triplets) */
+	pointLightPositions: IUniform<Float32Array>;
+	/** Point light colors/intensities (rgb triplets) */
+	pointLightColors: IUniform<Float32Array>;
+	/** Point light effective ranges */
+	pointLightRanges: IUniform<Float32Array>;
 	/** Lookup texture for point classification rendering */
 	classificationLUT: IUniform<Texture>;
 	/** Number of active clipping boxes */
@@ -111,6 +131,8 @@ export interface IPointCloudMaterialUniforms {
 	fov: IUniform<number>;
 	/** Gradient texture for color mapping */
 	gradient: IUniform<Texture>;
+	/** World-space axis used for elevation/rgb-height projection */
+	elevationAxis: IUniform<[number, number, number]>;
 	/** Maximum height value for elevation-based coloring */
 	heightMax: IUniform<number>;
 	/** Minimum height value for elevation-based coloring */
@@ -254,7 +276,17 @@ const OUTPUT_COLOR_ENCODING = {
 
 export class PointCloudMaterial extends RawShaderMaterial 
 {
+	private static readonly MAX_POINT_LIGHTS = 16;
+	private static readonly MAX_DIR_LIGHTS = 8;
+
 	private static helperVec3 = new Vector3();
+	private static helperAxis = new Vector3();
+	private static helperCorner = new Vector3();
+	private static helperMat3 = new Matrix3();
+	private static helperLightPos = new Vector3();
+	private static helperLightTargetPos = new Vector3();
+	private static helperLightDir = new Vector3();
+	private static helperCameraMat3 = new Matrix3();
 
 	lights = false;
 
@@ -282,10 +314,36 @@ export class PointCloudMaterial extends RawShaderMaterial
 		this._classification,
 	);
 
+	/**
+	 * Local-space axis used to compute elevation coloring.
+	 * This defaults to +Z and is transformed to world-space each frame.
+	 */
+	public elevationAxisLocal = new Vector3(0, 0, 1);
+
+	private cachedElevationAxisLocal = new Vector3(NaN, NaN, NaN);
+
+	private cachedMatrixWorldElements = new Float32Array(16);
+
+	private hasElevationCache = false;
+
+	private cachedLightFrame = -1;
+
+	private cachedLightSceneId = -1;
+
+	private cachedLightCameraId = -1;
+
 	uniforms: IPointCloudMaterialUniforms & Record<string, IUniform<any>> = {
 		bbSize: makeUniform('fv', [0, 0, 0] as [number, number, number]),
 		blendDepthSupplement: makeUniform('f', 0.0),
 		blendHardness: makeUniform('f', 2.0),
+		ambientLightColor: makeUniform('fv', [0, 0, 0] as [number, number, number]),
+		numDirectionalLights: makeUniform('i', 0),
+		numPointLights: makeUniform('i', 0),
+		directionalLightDirections: makeUniform('fv', new Float32Array(PointCloudMaterial.MAX_DIR_LIGHTS * 3)),
+		directionalLightColors: makeUniform('fv', new Float32Array(PointCloudMaterial.MAX_DIR_LIGHTS * 3)),
+		pointLightPositions: makeUniform('fv', new Float32Array(PointCloudMaterial.MAX_POINT_LIGHTS * 3)),
+		pointLightColors: makeUniform('fv', new Float32Array(PointCloudMaterial.MAX_POINT_LIGHTS * 3)),
+		pointLightRanges: makeUniform('fv', new Float32Array(PointCloudMaterial.MAX_POINT_LIGHTS)),
 		classificationLUT: makeUniform('t', this.classificationTexture || new Texture()),
 		clipBoxCount: makeUniform('f', 0),
 		clipBoxes: makeUniform('Matrix4fv', [] as any),
@@ -293,6 +351,7 @@ export class PointCloudMaterial extends RawShaderMaterial
 		clipSpheres: makeUniform('fv', [] as any),
 		depthMap: makeUniform('t', null),
 		diffuse: makeUniform('fv', [1, 1, 1] as [number, number, number]),
+		elevationAxis: makeUniform('fv', [0, 0, 1] as [number, number, number]),
 		fov: makeUniform('f', 1.0),
 		gradient: makeUniform('t', this.gradientTexture || new Texture()),
 		heightMax: makeUniform('f', 1.0),
@@ -344,7 +403,25 @@ export class PointCloudMaterial extends RawShaderMaterial
 
   @uniform('depthMap') depthMap!: Texture | undefined;
 
+  @uniform('ambientLightColor') ambientLightColor!: [number, number, number];
+
+  @uniform('numDirectionalLights') numDirectionalLights!: number;
+
+  @uniform('numPointLights') numPointLights!: number;
+
+  @uniform('directionalLightDirections') directionalLightDirections!: Float32Array;
+
+  @uniform('directionalLightColors') directionalLightColors!: Float32Array;
+
+  @uniform('pointLightPositions') pointLightPositions!: Float32Array;
+
+  @uniform('pointLightColors') pointLightColors!: Float32Array;
+
+  @uniform('pointLightRanges') pointLightRanges!: Float32Array;
+
   @uniform('fov') fov!: number;
+
+  @uniform('elevationAxis') elevationAxis!: [number, number, number];
 
   @uniform('heightMax') heightMax!: number;
 
@@ -630,8 +707,8 @@ export class PointCloudMaterial extends RawShaderMaterial
   		define('highlight_point');
   	}
 
-  	define('MAX_POINT_LIGHTS 0');
-  	define('MAX_DIR_LIGHTS 0');
+  	define(`MAX_POINT_LIGHTS ${PointCloudMaterial.MAX_POINT_LIGHTS}`);
+  	define(`MAX_DIR_LIGHTS ${PointCloudMaterial.MAX_DIR_LIGHTS}`);
 
   	if (this.newFormat) 
   	{
@@ -830,6 +907,8 @@ export class PointCloudMaterial extends RawShaderMaterial
   	const pixelRatio = renderer.getPixelRatio();
 
 	this.useLogDepth = renderer.capabilities.logarithmicDepthBuffer;
+	octree.updateMatrixWorld(true);
+	this.updateElevationProjectionParams(octree);
 
   	if (camera.type === PERSPECTIVE_CAMERA) 
   	{
@@ -877,6 +956,61 @@ export class PointCloudMaterial extends RawShaderMaterial
   		this.updateVisibilityTextureData(visibleNodes);
   	}
   }
+
+	private updateElevationProjectionParams(octree: PointCloudOctree): void
+	{
+		const matrixElements = octree.matrixWorld.elements;
+		const axisLocal = this.elevationAxisLocal;
+		const matrixChanged = !this.hasElevationCache || this.cachedMatrixWorldElements.some((value, index) => {
+			return value !== matrixElements[index];
+		});
+		const axisChanged = !this.hasElevationCache || !this.cachedElevationAxisLocal.equals(axisLocal);
+		if (!matrixChanged && !axisChanged)
+		{
+			return;
+		}
+
+		this.cachedMatrixWorldElements.set(matrixElements);
+		this.cachedElevationAxisLocal.copy(axisLocal);
+		this.hasElevationCache = true;
+
+		const axis = PointCloudMaterial.helperAxis.copy(axisLocal);
+		if (axis.lengthSq() < 1e-12) 
+		{
+			axis.set(0, 0, 1);
+		}
+		axis.normalize();
+		axis.applyMatrix3(PointCloudMaterial.helperMat3.getNormalMatrix(octree.matrixWorld));
+		if (axis.lengthSq() < 1e-12)
+		{
+			axis.set(0, 0, 1);
+		}
+		else
+		{
+			axis.normalize();
+		}
+		this.elevationAxis = [axis.x, axis.y, axis.z];
+
+		const bbox = octree.pcoGeometry.tightBoundingBox || octree.pcoGeometry.boundingBox;
+		const min = bbox.min;
+		const max = bbox.max;
+		let minProjection = Infinity;
+		let maxProjection = -Infinity;
+		for (let i = 0; i < 8; i++)
+		{
+			PointCloudMaterial.helperCorner.set(
+				(i & 0b001) !== 0 ? max.x : min.x,
+				(i & 0b010) !== 0 ? max.y : min.y,
+				(i & 0b100) !== 0 ? max.z : min.z,
+			).applyMatrix4(octree.matrixWorld);
+			const projection = PointCloudMaterial.helperCorner.dot(axis);
+			minProjection = Math.min(minProjection, projection);
+			maxProjection = Math.max(maxProjection, projection);
+		}
+		const projectionRange = Math.max(maxProjection - minProjection, 1e-6);
+		this.heightMin = minProjection - 0.2 * projectionRange;
+		this.heightMax = maxProjection + 0.2 * projectionRange;
+	}
 
   private updateVisibilityTextureData(nodes: PointCloudOctreeNode[]) 
   {
@@ -935,6 +1069,8 @@ export class PointCloudMaterial extends RawShaderMaterial
   	) => 
   	{
 			if (material instanceof PointCloudMaterial) {
+				material.updateLightUniforms(_renderer, _scene, _camera);
+
 				const materialUniforms = material.uniforms;
 
 				materialUniforms.level.value = node.level;
@@ -954,6 +1090,123 @@ export class PointCloudMaterial extends RawShaderMaterial
 			}
 		};
   }
+
+	private updateLightUniforms(
+		renderer: WebGLRenderer,
+		scene: Scene,
+		camera: Camera,
+	): void
+	{
+		const frame = renderer.info.render.frame;
+		if (
+			this.cachedLightFrame === frame &&
+			this.cachedLightSceneId === scene.id &&
+			this.cachedLightCameraId === camera.id
+		)
+		{
+			return;
+		}
+
+		this.cachedLightFrame = frame;
+		this.cachedLightSceneId = scene.id;
+		this.cachedLightCameraId = camera.id;
+
+		const ambient = [0, 0, 0] as [number, number, number];
+		let dirCount = 0;
+		let pointCount = 0;
+		const dirDirections = this.directionalLightDirections;
+		const dirColors = this.directionalLightColors;
+		const pointPositions = this.pointLightPositions;
+		const pointColors = this.pointLightColors;
+		const pointRanges = this.pointLightRanges;
+
+		PointCloudMaterial.helperCameraMat3.setFromMatrix4(camera.matrixWorldInverse);
+
+		scene.traverseVisible((object) => {
+			if (!('isLight' in object) || !(object as any).isLight)
+			{
+				return;
+			}
+
+			const light = object as AmbientLight | DirectionalLight | PointLight;
+			if (!light.visible || light.intensity <= 0)
+			{
+				return;
+			}
+			if (!light.layers.test(camera.layers))
+			{
+				return;
+			}
+
+			const lr = light.color.r * light.intensity;
+			const lg = light.color.g * light.intensity;
+			const lb = light.color.b * light.intensity;
+
+			if ((light as AmbientLight).isAmbientLight)
+			{
+				ambient[0] += lr;
+				ambient[1] += lg;
+				ambient[2] += lb;
+				return;
+			}
+
+			if ((light as DirectionalLight).isDirectionalLight)
+			{
+				if (dirCount >= PointCloudMaterial.MAX_DIR_LIGHTS)
+				{
+					return;
+				}
+
+				const directional = light as DirectionalLight;
+				directional.updateMatrixWorld();
+				directional.target.updateMatrixWorld();
+				directional.getWorldPosition(PointCloudMaterial.helperLightPos);
+				directional.target.getWorldPosition(PointCloudMaterial.helperLightTargetPos);
+				PointCloudMaterial.helperLightDir
+					.subVectors(PointCloudMaterial.helperLightPos, PointCloudMaterial.helperLightTargetPos)
+					.normalize()
+					.applyMatrix3(PointCloudMaterial.helperCameraMat3)
+					.normalize();
+
+				const di = dirCount * 3;
+				dirDirections[di + 0] = PointCloudMaterial.helperLightDir.x;
+				dirDirections[di + 1] = PointCloudMaterial.helperLightDir.y;
+				dirDirections[di + 2] = PointCloudMaterial.helperLightDir.z;
+				dirColors[di + 0] = lr;
+				dirColors[di + 1] = lg;
+				dirColors[di + 2] = lb;
+				dirCount++;
+				return;
+			}
+
+			if ((light as any).isPointLight)
+			{
+				if (pointCount >= PointCloudMaterial.MAX_POINT_LIGHTS)
+				{
+					return;
+				}
+
+				const point = light as PointLight;
+				point.updateMatrixWorld();
+				point.getWorldPosition(PointCloudMaterial.helperLightPos);
+				PointCloudMaterial.helperLightPos.applyMatrix4(camera.matrixWorldInverse);
+
+				const pi = pointCount * 3;
+				pointPositions[pi + 0] = PointCloudMaterial.helperLightPos.x;
+				pointPositions[pi + 1] = PointCloudMaterial.helperLightPos.y;
+				pointPositions[pi + 2] = PointCloudMaterial.helperLightPos.z;
+				pointColors[pi + 0] = lr;
+				pointColors[pi + 1] = lg;
+				pointColors[pi + 2] = lb;
+				pointRanges[pointCount] = point.distance > 0 ? point.distance : 0;
+				pointCount++;
+			}
+		});
+
+		this.ambientLightColor = ambient;
+		this.numDirectionalLights = dirCount;
+		this.numPointLights = pointCount;
+	}
 }
 
 function makeUniform<T>(type: string, value: T): IUniform<T> 

@@ -45,6 +45,7 @@ uniform float orthoHeight;
 
 uniform float heightMin;
 uniform float heightMax;
+uniform vec3 elevationAxis;
 uniform float size; // Base pixel size
 uniform float minSize; // Minimum point size
 uniform float maxSize; // Maximum point size
@@ -87,11 +88,10 @@ uniform sampler2D depthMap;
 
 #ifdef new_format
 	in vec4 rgba;
-	out vec4 vColor;
 #else
 	in vec3 color;
-	out vec3 vColor;
 #endif
+out vec3 vColor;
 
 #if !defined(color_type_point_index)
 	out float vOpacity;
@@ -109,7 +109,7 @@ out vec3 vViewPosition;
 	out float vRadius;
 #endif
 
-#if defined(color_type_phong) && (MAX_POINT_LIGHTS > 0 || MAX_DIR_LIGHTS > 0)
+#if defined(color_type_phong)
 	out vec3 vNormal;
 #endif
 
@@ -228,19 +228,23 @@ float getContrastFactor(float contrast) {
 	return 1.0158730158730156 * (contrast + 1.0) / (1.0158730158730156 - contrast);
 }
 
-#ifndef new_format
 // Adjusts RGB values with gamma, contrast and brightness factors
 vec3 getRGB() {
+	#ifdef new_format
+		vec3 baseColor = rgba.rgb;
+	#else
+		vec3 baseColor = color;
+	#endif
+
 	#if defined(use_rgb_gamma_contrast_brightness)
-		vec3 rgb = pow(color, vec3(rgbGamma));
+		vec3 rgb = pow(baseColor, vec3(rgbGamma));
 		rgb += rgbBrightness;
 		rgb = (rgb - 0.5) * getContrastFactor(rgbContrast) + 0.5;
 		return clamp(rgb, 0.0, 1.0);
 	#else
-		return color;
+		return baseColor;
 	#endif
 }
-#endif
 
 // Adjusts intensity value based on settings
 float getIntensity() {
@@ -253,7 +257,8 @@ float getIntensity() {
 // Maps elevation to a gradient color
 vec3 getElevation() {
 	vec4 world = modelMatrix * vec4(position, 1.0);
-	float w = (world.z - heightMin) / (heightMax - heightMin);
+	float projectedHeight = dot(world.xyz, elevationAxis);
+	float w = (projectedHeight - heightMin) / (heightMax - heightMin);
 	return texture(gradient, vec2(w, 1.0 - w)).rgb;
 }
 
@@ -277,7 +282,6 @@ vec3 getSourceID() {
 	return texture(gradient, vec2(w, 1.0 - w)).rgb;
 }
 
-#ifndef new_format
 // Combines multiple color sources into one composite color
 vec3 getCompositeColor() {
 	vec3 c = wRGB * getRGB();
@@ -301,19 +305,7 @@ vec3 getCompositeColor() {
 	}
 	return c;
 }
-#endif
 
-#ifdef new_format
-// sRGB conversion functions
-vec4 fromLinear(vec4 linearRGB) {
-	bvec4 cutoff = lessThan(linearRGB, vec4(0.0031308));
-	return mix(linearRGB * vec4(12.92), vec4(1.055) * pow(linearRGB, vec4(1.0/2.4)) - vec4(0.055), cutoff);
-} 
-vec4 toLinear(vec4 sRGB) {
-	bvec4 cutoff = lessThan(sRGB, vec4(0.04045));
-	return mix(sRGB/vec4(12.92), pow((sRGB + vec4(0.055))/vec4(1.055), vec4(2.4)), cutoff);
-}
-#else
 vec3 fromLinear(vec3 linearRGB) {
 	bvec3 cutoff = lessThan(linearRGB, vec3(0.0031308));
 	return mix(linearRGB * vec3(12.92), vec3(1.055) * pow(linearRGB, vec3(1.0/2.4)) - vec3(0.055), cutoff);
@@ -322,7 +314,6 @@ vec3 toLinear(vec3 sRGB) {
 	bvec3 cutoff = lessThan(sRGB, vec3(0.04045));
 	return mix(sRGB/vec3(12.92), pow((sRGB + vec3(0.055))/vec3(1.055), vec3(2.4)), cutoff);
 }
-#endif
 
 void main() {
 	// Compute model-view position and projected position
@@ -334,7 +325,7 @@ void main() {
 		vLinearDepth = gl_Position.w;
 	#endif
 
-	#if defined(color_type_phong) && (MAX_POINT_LIGHTS > 0 || MAX_DIR_LIGHTS > 0)
+	#if defined(color_type_phong)
 		vNormal = normalize(normalMatrix * normal);
 	#endif
 
@@ -402,9 +393,7 @@ void main() {
 
 
 	// POINT COLOR SELECTION
-	#ifdef new_format
-		vColor = rgba;
-	#elif defined color_type_rgb
+	#if defined color_type_rgb
 		vColor = getRGB();
 	#elif defined color_type_height
 		vColor = getElevation();
@@ -438,7 +427,7 @@ void main() {
 	#elif defined color_type_normal
 		vColor = (modelMatrix * vec4(normal, 0.0)).xyz;
 	#elif defined color_type_phong
-		vColor = color;
+		vColor = getRGB();
 	#elif defined color_type_composite
 		vColor = getCompositeColor();
 	#endif
