@@ -36,7 +36,7 @@
 	},
 	"devDependencies": {
 		"@types/node": "20.8.4",
-		"@types/three": "^0.152.1",
+		"@types/three": "0.174.0",
 		"@typescript-eslint/eslint-plugin": "8.0.1",
 		"@typescript-eslint/parser": "8.0.1",
 		"copy-webpack-plugin": "11.0.0",
@@ -47,7 +47,7 @@
 		"html-webpack-plugin": "5.5.0",
 		"raw-loader": "4.0.2",
 		"style-loader": "3.3.1",
-		"three": "^0.154.0",
+		"three": "0.174.0",
 		"ts-loader": "9.5.1",
 		"typedoc": "0.28.5",
 		"typescript": "5.5.4",
