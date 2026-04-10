@@ -119,10 +119,18 @@ export interface IPointCloudMaterialUniforms {
 	clipBoxCount: IUniform<number>;
 	/** Array containing clipping box parameters */
 	clipBoxes: IUniform<Float32Array>;
+	/** Array containing clipping box modes (0 = include, 1 = exclude) */
+	clipBoxModes: IUniform<Float32Array>;
 	/** Number of active clipping spheres */
 	clipSphereCount: IUniform<number>;
 	/** Array containing clipping sphere parameters (vec4: xyz=center, w=radius) */
 	clipSpheres: IUniform<Float32Array>;
+	/** Array containing clipping sphere modes (0 = include, 1 = exclude) */
+	clipSphereModes: IUniform<Float32Array>;
+	/** Number of active clipping planes */
+	clipPlaneCount: IUniform<number>;
+	/** Array containing clipping plane parameters (vec4: xyz=normal, w=constant) */
+	clipPlanes: IUniform<Float32Array>;
 	/** Depth map texture for depth-based effects, null if not used */
 	depthMap: IUniform<Texture | null>;
 	/** Diffuse color as RGB values [r, g, b] */
@@ -300,6 +308,10 @@ export class PointCloudMaterial extends RawShaderMaterial
 
 	clipSpheres: IClipSphere[] = [];
 
+	private hasPerClipVolumeModes: boolean = false;
+
+	private numClipPlanes: number = 0;
+
 	visibleNodesTexture: Texture | undefined;
 
 	private visibleNodeTextureOffsets = new Map<string, number>();
@@ -347,8 +359,12 @@ export class PointCloudMaterial extends RawShaderMaterial
 		classificationLUT: makeUniform('t', this.classificationTexture || new Texture()),
 		clipBoxCount: makeUniform('f', 0),
 		clipBoxes: makeUniform('Matrix4fv', [] as any),
+		clipBoxModes: makeUniform('fv', [] as any),
 		clipSphereCount: makeUniform('f', 0),
 		clipSpheres: makeUniform('fv', [] as any),
+		clipSphereModes: makeUniform('fv', [] as any),
+		clipPlaneCount: makeUniform('f', 0),
+		clipPlanes: makeUniform('fv', [] as any),
 		depthMap: makeUniform('t', null),
 		diffuse: makeUniform('fv', [1, 1, 1] as [number, number, number]),
 		elevationAxis: makeUniform('fv', [0, 0, 1] as [number, number, number]),
@@ -702,6 +718,16 @@ export class PointCloudMaterial extends RawShaderMaterial
   		define('use_clip_sphere');
   	}
 
+	if (this.numClipPlanes > 0)
+	{
+		define('use_clip_plane');
+	}
+
+	if (this.hasPerClipVolumeModes)
+	{
+		define('clip_per_volume_mode');
+	}
+
   	if (this.highlightPoint) 
   	{
   		define('highlight_point');
@@ -727,6 +753,12 @@ export class PointCloudMaterial extends RawShaderMaterial
   	return parts.join('\n');
   }
 
+	private recomputeHasPerClipVolumeModes(): boolean
+	{
+		return this.clipBoxes.some((box) => box.mode !== undefined) ||
+			this.clipSpheres.some((sphere) => sphere.mode !== undefined);
+	}
+
   setClipBoxes(clipBoxes: IClipBox[]): void 
   {
   	if (!clipBoxes) 
@@ -734,18 +766,13 @@ export class PointCloudMaterial extends RawShaderMaterial
   		return;
   	}
 
-  	this.clipBoxes = clipBoxes;
+	const hadClipBoxes = this.numClipBoxes > 0;
+	const hadPerClipVolumeModes = this.hasPerClipVolumeModes;
 
-  	const doUpdate =
-	  this.numClipBoxes !== clipBoxes.length && (clipBoxes.length === 0 || this.numClipBoxes === 0);
+  	this.clipBoxes = clipBoxes;
 
   	this.numClipBoxes = clipBoxes.length;
   	this.setUniform('clipBoxCount', this.numClipBoxes);
-
-  	if (doUpdate) 
-  	{
-  		this.updateShaderSource();
-  	}
 
   	const clipBoxesLength = this.numClipBoxes * 16;
   	const clipBoxesArray = new Float32Array(clipBoxesLength);
@@ -764,6 +791,23 @@ export class PointCloudMaterial extends RawShaderMaterial
   	}
 
   	this.setUniform('clipBoxes', clipBoxesArray);
+
+	const clipBoxModesArray = new Float32Array(this.numClipBoxes);
+	for (let i = 0; i < this.numClipBoxes; i++)
+	{
+		clipBoxModesArray[i] = this.clipBoxes[i].mode === 'exclude' ? 1 : 0;
+	}
+	this.setUniform('clipBoxModes', clipBoxModesArray);
+
+	this.hasPerClipVolumeModes = this.recomputeHasPerClipVolumeModes();
+
+	const hasClipBoxes = this.numClipBoxes > 0;
+	const doUpdate = hadClipBoxes !== hasClipBoxes ||
+		hadPerClipVolumeModes !== this.hasPerClipVolumeModes;
+	if (doUpdate)
+	{
+		this.updateShaderSource();
+	}
   }
 
   setClipSpheres(clipSpheres: IClipSphere[]): void
@@ -773,18 +817,13 @@ export class PointCloudMaterial extends RawShaderMaterial
   		return;
   	}
 
-  	this.clipSpheres = clipSpheres;
+	const hadClipSpheres = this.numClipSpheres > 0;
+	const hadPerClipVolumeModes = this.hasPerClipVolumeModes;
 
-  	const doUpdate =
-	  (this.numClipSpheres === 0) !== (clipSpheres.length === 0);
+  	this.clipSpheres = clipSpheres;
 
   	this.numClipSpheres = clipSpheres.length;
   	this.setUniform('clipSphereCount', this.numClipSpheres);
-
-  	if (doUpdate)
-  	{
-  		this.updateShaderSource();
-  	}
 
   	const clipSpheresLength = this.numClipSpheres * 4;
   	const clipSpheresArray = new Float32Array(clipSpheresLength);
@@ -798,7 +837,56 @@ export class PointCloudMaterial extends RawShaderMaterial
   	}
 
   	this.setUniform('clipSpheres', clipSpheresArray);
+
+	const clipSphereModesArray = new Float32Array(this.numClipSpheres);
+	for (let i = 0; i < this.numClipSpheres; i++)
+	{
+		clipSphereModesArray[i] = this.clipSpheres[i].mode === 'exclude' ? 1 : 0;
+	}
+	this.setUniform('clipSphereModes', clipSphereModesArray);
+
+	this.hasPerClipVolumeModes = this.recomputeHasPerClipVolumeModes();
+
+	const hasClipSpheres = this.numClipSpheres > 0;
+	const doUpdate = hadClipSpheres !== hasClipSpheres ||
+		hadPerClipVolumeModes !== this.hasPerClipVolumeModes;
+	if (doUpdate)
+	{
+		this.updateShaderSource();
+	}
   }
+
+	/**
+	 * Syncs inherited `clippingPlanes` to internal shader uniforms.
+	 * Called automatically each frame from `updateMaterial()`.
+	 */
+	private syncClippingPlanes(): void
+	{
+		const planes = this.clippingPlanes;
+		const count = (planes && planes.length) ? planes.length : 0;
+
+		const doUpdate = (this.numClipPlanes === 0) !== (count === 0);
+		if (doUpdate)
+		{
+			this.updateShaderSource();
+		}
+
+		this.numClipPlanes = count;
+		this.setUniform('clipPlaneCount', count);
+
+		if (count > 0 && planes)
+		{
+			const arr = new Float32Array(count * 4);
+			for (let i = 0; i < count; i++)
+			{
+				arr[i * 4 + 0] = planes[i].normal.x;
+				arr[i * 4 + 1] = planes[i].normal.y;
+				arr[i * 4 + 2] = planes[i].normal.z;
+				arr[i * 4 + 3] = planes[i].constant;
+			}
+			this.setUniform('clipPlanes', arr);
+		}
+	}
 
   get gradient(): IGradient 
   {
@@ -905,6 +993,8 @@ export class PointCloudMaterial extends RawShaderMaterial
   ): void 
   {
   	const pixelRatio = renderer.getPixelRatio();
+
+	this.syncClippingPlanes();
 
 	this.useLogDepth = renderer.capabilities.logarithmicDepthBuffer;
 	octree.updateMatrixWorld(true);
