@@ -1,15 +1,19 @@
 import {
 	AdditiveBlending,
+	AmbientLight,
 	BufferGeometry,
 	Camera,
 	Color,
+	DirectionalLight,
 	GLSL3,
 	LessEqualDepth,
+	Matrix3,
 	Material,
 	NearestFilter,
 	NoBlending,
 	OrthographicCamera,
 	PerspectiveCamera,
+	PointLight,
 	RawShaderMaterial,
 	Scene,
 	Texture,
@@ -28,20 +32,20 @@ import {
 	DEFAULT_RGB_GAMMA,
 	PERSPECTIVE_CAMERA
 } from '../constants';
-import { PointCloudOctree } from '../point-cloud-octree';
-import { PointCloudOctreeNode } from '../point-cloud-octree-node';
-import { byLevelAndIndex } from '../utils/utils';
-import { DEFAULT_CLASSIFICATION } from './classification';
-import { ClipMode, IClipBox, IClipSphere } from './clipping';
-import { PointColorType, PointOpacityType, PointShape, PointSizeType, TreeType } from './enums';
-import { SPECTRAL } from './gradients';
+import {PointCloudOctree} from '../point-cloud-octree';
+import {PointCloudOctreeNode} from '../point-cloud-octree-node';
+import {byLevelAndIndex} from '../utils/utils';
+import {DEFAULT_CLASSIFICATION} from './classification';
+import {ClipMode, IClipBox, IClipSphere} from './clipping';
+import {PointColorType, PointOpacityType, PointShape, PointSizeType, TreeType} from './enums';
+import {SPECTRAL} from './gradients';
 import {
 	generateClassificationTexture,
 	generateDataTexture,
 	generateGradientTexture
 } from './texture-generation';
-import { IClassification, IGradient, IUniform } from './types';
-import { ColorEncoding } from './color-encoding';
+import {IClassification, IGradient, IUniform} from './types';
+import {ColorEncoding} from './color-encoding';
 
 const VertShader = require('./shaders/pointcloud.vs').default;
 const FragShader = require('./shaders/pointcloud.fs').default;
@@ -56,22 +60,22 @@ export interface IPointCloudMaterialParameters {
 	 * The base size of points in the point cloud.
 	 */
 	size: number;
-
+	
 	/**
 	 * The minimum allowed size for points when scaling.
 	 */
 	minSize: number;
-
+	
 	/**
 	 * The maximum allowed size for points when scaling.
 	 */
 	maxSize: number;
-
+	
 	/**
 	 * The type of tree structure used for organizing the point cloud data.
 	 */
 	treeType: TreeType;
-
+	
 	/**
 	 * Whether to use the new format for point cloud data processing.
 	 */
@@ -93,6 +97,22 @@ export interface IPointCloudMaterialUniforms {
 	blendDepthSupplement: IUniform<number>;
 	/** Hardness factor for blending operations */
 	blendHardness: IUniform<number>;
+	/** Summed ambient light color contribution */
+	ambientLightColor: IUniform<[number, number, number]>;
+	/** Number of active directional lights used by the point shader */
+	numDirectionalLights: IUniform<number>;
+	/** Number of active point lights used by the point shader */
+	numPointLights: IUniform<number>;
+	/** Directional light directions in view space (xyz triplets) */
+	directionalLightDirections: IUniform<Float32Array>;
+	/** Directional light colors/intensities (rgb triplets) */
+	directionalLightColors: IUniform<Float32Array>;
+	/** Point light positions in view space (xyz triplets) */
+	pointLightPositions: IUniform<Float32Array>;
+	/** Point light colors/intensities (rgb triplets) */
+	pointLightColors: IUniform<Float32Array>;
+	/** Point light effective ranges */
+	pointLightRanges: IUniform<Float32Array>;
 	/** Lookup texture for point classification rendering */
 	classificationLUT: IUniform<Texture>;
 	/** Number of active clipping boxes */
@@ -103,10 +123,6 @@ export interface IPointCloudMaterialUniforms {
 	clipSphereCount: IUniform<number>;
 	/** Array containing clipping sphere parameters (vec4: xyz=center, w=radius) */
 	clipSpheres: IUniform<Float32Array>;
-	/** Number of active clipping planes */
-	clipPlaneCount: IUniform<number>;
-	/** Array containing clipping plane parameters (vec4: xyz=normal, w=constant) */
-	clipPlanes: IUniform<Float32Array>;
 	/** Depth map texture for depth-based effects, null if not used */
 	depthMap: IUniform<Texture | null>;
 	/** Diffuse color as RGB values [r, g, b] */
@@ -115,6 +131,8 @@ export interface IPointCloudMaterialUniforms {
 	fov: IUniform<number>;
 	/** Gradient texture for color mapping */
 	gradient: IUniform<Texture>;
+	/** World-space axis used for elevation/rgb-height projection */
+	elevationAxis: IUniform<[number, number, number]>;
 	/** Maximum height value for elevation-based coloring */
 	heightMax: IUniform<number>;
 	/** Minimum height value for elevation-based coloring */
@@ -256,8 +274,19 @@ const OUTPUT_COLOR_ENCODING = {
 	[ColorEncoding.SRGB]: 'output_color_encoding_sRGB'
 };
 
-export class PointCloudMaterial extends RawShaderMaterial {
+export class PointCloudMaterial extends RawShaderMaterial 
+{
+	private static readonly MAX_POINT_LIGHTS = 16;
+	private static readonly MAX_DIR_LIGHTS = 8;
+
 	private static helperVec3 = new Vector3();
+	private static helperAxis = new Vector3();
+	private static helperCorner = new Vector3();
+	private static helperMat3 = new Matrix3();
+	private static helperLightPos = new Vector3();
+	private static helperLightTargetPos = new Vector3();
+	private static helperLightDir = new Vector3();
+	private static helperCameraMat3 = new Matrix3();
 
 	lights = false;
 
@@ -270,8 +299,6 @@ export class PointCloudMaterial extends RawShaderMaterial {
 	numClipSpheres: number = 0;
 
 	clipSpheres: IClipSphere[] = [];
-
-	private numClipPlanes: number = 0;
 
 	visibleNodesTexture: Texture | undefined;
 
@@ -287,19 +314,44 @@ export class PointCloudMaterial extends RawShaderMaterial {
 		this._classification,
 	);
 
+	/**
+	 * Local-space axis used to compute elevation coloring.
+	 * This defaults to +Z and is transformed to world-space each frame.
+	 */
+	public elevationAxisLocal = new Vector3(0, 0, 1);
+
+	private cachedElevationAxisLocal = new Vector3(NaN, NaN, NaN);
+
+	private cachedMatrixWorldElements = new Float32Array(16);
+
+	private hasElevationCache = false;
+
+	private cachedLightFrame = -1;
+
+	private cachedLightSceneId = -1;
+
+	private cachedLightCameraId = -1;
+
 	uniforms: IPointCloudMaterialUniforms & Record<string, IUniform<any>> = {
 		bbSize: makeUniform('fv', [0, 0, 0] as [number, number, number]),
 		blendDepthSupplement: makeUniform('f', 0.0),
 		blendHardness: makeUniform('f', 2.0),
+		ambientLightColor: makeUniform('fv', [0, 0, 0] as [number, number, number]),
+		numDirectionalLights: makeUniform('i', 0),
+		numPointLights: makeUniform('i', 0),
+		directionalLightDirections: makeUniform('fv', new Float32Array(PointCloudMaterial.MAX_DIR_LIGHTS * 3)),
+		directionalLightColors: makeUniform('fv', new Float32Array(PointCloudMaterial.MAX_DIR_LIGHTS * 3)),
+		pointLightPositions: makeUniform('fv', new Float32Array(PointCloudMaterial.MAX_POINT_LIGHTS * 3)),
+		pointLightColors: makeUniform('fv', new Float32Array(PointCloudMaterial.MAX_POINT_LIGHTS * 3)),
+		pointLightRanges: makeUniform('fv', new Float32Array(PointCloudMaterial.MAX_POINT_LIGHTS)),
 		classificationLUT: makeUniform('t', this.classificationTexture || new Texture()),
 		clipBoxCount: makeUniform('f', 0),
 		clipBoxes: makeUniform('Matrix4fv', [] as any),
 		clipSphereCount: makeUniform('f', 0),
 		clipSpheres: makeUniform('fv', [] as any),
-		clipPlaneCount: makeUniform('f', 0),
-		clipPlanes: makeUniform('fv', [] as any),
 		depthMap: makeUniform('t', null),
 		diffuse: makeUniform('fv', [1, 1, 1] as [number, number, number]),
+		elevationAxis: makeUniform('fv', [0, 0, 1] as [number, number, number]),
 		fov: makeUniform('f', 1.0),
 		gradient: makeUniform('t', this.gradientTexture || new Texture()),
 		heightMax: makeUniform('f', 1.0),
@@ -347,614 +399,823 @@ export class PointCloudMaterial extends RawShaderMaterial {
 		viewScale: makeUniform('f', 1.0)
 	};
 
-	@uniform('bbSize') bbSize!: [number, number, number];
+  @uniform('bbSize') bbSize!: [number, number, number];
 
-	@uniform('depthMap') depthMap!: Texture | undefined;
+  @uniform('depthMap') depthMap!: Texture | undefined;
 
-	@uniform('fov') fov!: number;
+  @uniform('ambientLightColor') ambientLightColor!: [number, number, number];
 
-	@uniform('heightMax') heightMax!: number;
+  @uniform('numDirectionalLights') numDirectionalLights!: number;
 
-	@uniform('heightMin') heightMin!: number;
+  @uniform('numPointLights') numPointLights!: number;
 
-	@uniform('intensityBrightness') intensityBrightness!: number;
+  @uniform('directionalLightDirections') directionalLightDirections!: Float32Array;
 
-	@uniform('intensityContrast') intensityContrast!: number;
+  @uniform('directionalLightColors') directionalLightColors!: Float32Array;
 
-	@uniform('intensityGamma') intensityGamma!: number;
+  @uniform('pointLightPositions') pointLightPositions!: Float32Array;
 
-	@uniform('intensityRange') intensityRange!: [number, number];
+  @uniform('pointLightColors') pointLightColors!: Float32Array;
 
-	@uniform('maxSize') maxSize!: number;
+  @uniform('pointLightRanges') pointLightRanges!: Float32Array;
 
-	@uniform('minSize') minSize!: number;
+  @uniform('fov') fov!: number;
 
-	@uniform('octreeSize') octreeSize!: number;
+  @uniform('elevationAxis') elevationAxis!: [number, number, number];
 
-	@uniform('opacity', true) opacity!: number;
+  @uniform('heightMax') heightMax!: number;
 
-	@uniform('rgbBrightness', true) rgbBrightness!: number;
+  @uniform('heightMin') heightMin!: number;
 
-	@uniform('rgbContrast', true) rgbContrast!: number;
+  @uniform('intensityBrightness') intensityBrightness!: number;
 
-	@uniform('rgbGamma', true) rgbGamma!: number;
+  @uniform('intensityContrast') intensityContrast!: number;
 
-	@uniform('screenHeight') screenHeight!: number;
+  @uniform('intensityGamma') intensityGamma!: number;
 
-	@uniform('screenWidth') screenWidth!: number;
+  @uniform('intensityRange') intensityRange!: [number, number];
 
-	@uniform('orthoWidth') orthoWidth!: number;
+  @uniform('maxSize') maxSize!: number;
 
-	@uniform('orthoHeight') orthoHeight!: number;
+  @uniform('minSize') minSize!: number;
 
-	@uniform('useOrthographicCamera') useOrthographicCamera!: boolean;
+  @uniform('octreeSize') octreeSize!: number;
 
-	@uniform('far') far!: number;
+  @uniform('opacity', true) opacity!: number;
 
-	@uniform('size') size!: number;
+  @uniform('rgbBrightness', true) rgbBrightness!: number;
 
-	@uniform('spacing') spacing!: number;
+  @uniform('rgbContrast', true) rgbContrast!: number;
 
-	@uniform('transition') transition!: number;
+  @uniform('rgbGamma', true) rgbGamma!: number;
 
-	@uniform('uColor') color!: Color;
+  @uniform('screenHeight') screenHeight!: number;
 
-	@uniform('wClassification') weightClassification!: number;
+  @uniform('screenWidth') screenWidth!: number;
 
-	@uniform('wElevation') weightElevation!: number;
+  @uniform('orthoWidth') orthoWidth!: number;
 
-	@uniform('wIntensity') weightIntensity!: number;
+  @uniform('orthoHeight') orthoHeight!: number;
 
-	@uniform('wReturnNumber') weightReturnNumber!: number;
+  @uniform('useOrthographicCamera') useOrthographicCamera!: boolean;
+  
+  @uniform('far') far!: number;
 
-	@uniform('wRGB') weightRGB!: number;
+  @uniform('size') size!: number;
 
-	@uniform('wSourceID') weightSourceID!: number;
+  @uniform('spacing') spacing!: number;
 
-	@uniform('opacityAttenuation') opacityAttenuation!: number;
+  @uniform('transition') transition!: number;
 
-	@uniform('filterByNormalThreshold') filterByNormalThreshold!: number;
+  @uniform('uColor') color!: Color;
 
-	@uniform('highlightedPointCoordinate') highlightedPointCoordinate!: Vector3;
+  @uniform('wClassification') weightClassification!: number;
 
-	@uniform('highlightedPointColor') highlightedPointColor!: Vector4;
+  @uniform('wElevation') weightElevation!: number;
 
-	@uniform('enablePointHighlighting') enablePointHighlighting!: boolean;
+  @uniform('wIntensity') weightIntensity!: number;
 
-	@uniform('highlightedPointScale') highlightedPointScale!: number;
+  @uniform('wReturnNumber') weightReturnNumber!: number;
 
-	@uniform('viewScale') viewScale!: number;
+  @uniform('wRGB') weightRGB!: number;
 
-	// Declare PointCloudMaterial attributes that need shader updates upon change, and set default values.
-	@requiresShaderUpdate() useClipBox: boolean = false;
+  @uniform('wSourceID') weightSourceID!: number;
 
-	@requiresShaderUpdate() useClipSphere: boolean = false;
+  @uniform('opacityAttenuation') opacityAttenuation!: number;
 
-	@requiresShaderUpdate() weighted: boolean = false;
+  @uniform('filterByNormalThreshold') filterByNormalThreshold!: number;
 
-	@requiresShaderUpdate() pointColorType: PointColorType = PointColorType.RGB;
+  @uniform('highlightedPointCoordinate') highlightedPointCoordinate!: Vector3;
 
-	@requiresShaderUpdate() pointSizeType: PointSizeType = PointSizeType.ADAPTIVE;
+  @uniform('highlightedPointColor') highlightedPointColor!: Vector4;
 
-	@requiresShaderUpdate() clipMode: ClipMode = ClipMode.DISABLED;
+  @uniform('enablePointHighlighting') enablePointHighlighting!: boolean;
 
-	@requiresShaderUpdate() useEDL: boolean = false;
+  @uniform('highlightedPointScale') highlightedPointScale!: number;
 
-	@requiresShaderUpdate() shape: PointShape = PointShape.SQUARE;
+  @uniform('viewScale') viewScale!: number;
 
-	@requiresShaderUpdate() treeType: TreeType = TreeType.OCTREE;
+  // Declare PointCloudMaterial attributes that need shader updates upon change, and set default values.
+  @requiresShaderUpdate() useClipBox: boolean = false;
 
-	@requiresShaderUpdate() pointOpacityType: PointOpacityType = PointOpacityType.FIXED;
+  @requiresShaderUpdate() useClipSphere: boolean = false;
 
-	@requiresShaderUpdate() useFilterByNormal: boolean = false;
+  @requiresShaderUpdate() weighted: boolean = false;
 
-	@requiresShaderUpdate() highlightPoint: boolean = false;
+  @requiresShaderUpdate() pointColorType: PointColorType = PointColorType.RGB;
 
-	@requiresShaderUpdate() inputColorEncoding: ColorEncoding = ColorEncoding.SRGB;
+  @requiresShaderUpdate() pointSizeType: PointSizeType = PointSizeType.ADAPTIVE;
 
-	@requiresShaderUpdate() outputColorEncoding: ColorEncoding = ColorEncoding.LINEAR;
+  @requiresShaderUpdate() clipMode: ClipMode = ClipMode.DISABLED;
 
-	@requiresShaderUpdate() private useLogDepth: boolean = false;
+  @requiresShaderUpdate() useEDL: boolean = false;
 
-	@requiresShaderUpdate() private useReversedDepth: boolean = false;
+  @requiresShaderUpdate() shape: PointShape = PointShape.SQUARE;
 
-	attributes = {
-		position: { type: 'fv', value: [] },
-		color: { type: 'fv', value: [] },
-		normal: { type: 'fv', value: [] },
-		intensity: { type: 'f', value: [] },
-		classification: { type: 'f', value: [] },
-		returnNumber: { type: 'f', value: [] },
-		numberOfReturns: { type: 'f', value: [] },
-		pointSourceID: { type: 'f', value: [] },
-		indices: { type: 'fv', value: [] }
-	};
+  @requiresShaderUpdate() treeType: TreeType = TreeType.OCTREE;
 
-	newFormat: boolean;
+  @requiresShaderUpdate() pointOpacityType: PointOpacityType = PointOpacityType.FIXED;
 
-	constructor(parameters: Partial<IPointCloudMaterialParameters> = {}) {
-		super();
+  @requiresShaderUpdate() useFilterByNormal: boolean = false;
 
-		const tex = this.visibleNodesTexture = generateDataTexture(2048, 1, new Color(0xffffff));
-		tex.minFilter = NearestFilter;
-		tex.magFilter = NearestFilter;
-		this.setUniform('visibleNodes', tex);
+  @requiresShaderUpdate() highlightPoint: boolean = false;
 
-		this.treeType = getValid(parameters.treeType, TreeType.OCTREE);
-		this.size = getValid(parameters.size, 1.0);
-		this.minSize = getValid(parameters.minSize, 2.0);
-		this.maxSize = getValid(parameters.maxSize, 50.0);
+  @requiresShaderUpdate() inputColorEncoding: ColorEncoding = ColorEncoding.SRGB;
 
-		this.newFormat = Boolean(parameters.newFormat);
+  @requiresShaderUpdate() outputColorEncoding: ColorEncoding = ColorEncoding.LINEAR;
 
-		this.classification = DEFAULT_CLASSIFICATION;
+  @requiresShaderUpdate() private useLogDepth: boolean = false;
 
-		this.defaultAttributeValues.normal = [0, 0, 0];
-		this.defaultAttributeValues.classification = [0, 0, 0];
-		this.defaultAttributeValues.indices = [0, 0, 0, 0];
+  attributes = {
+  	position: {type: 'fv', value: []},
+  	color: {type: 'fv', value: []},
+  	normal: {type: 'fv', value: []},
+  	intensity: {type: 'f', value: []},
+  	classification: {type: 'f', value: []},
+  	returnNumber: {type: 'f', value: []},
+  	numberOfReturns: {type: 'f', value: []},
+  	pointSourceID: {type: 'f', value: []},
+  	indices: {type: 'fv', value: []}
+  };
+
+  newFormat: boolean;
 
-		this.vertexColors = true;
+  constructor(parameters: Partial<IPointCloudMaterialParameters> = {}) 
+  {
+  	super();
 
-		// throw new Error('Not implemented');
-		// this.extensions.fragDepth = true;
-
-		this.updateShaderSource();
+  	const tex = this.visibleNodesTexture = generateDataTexture(2048, 1, new Color(0xffffff));
+  	tex.minFilter = NearestFilter;
+  	tex.magFilter = NearestFilter;
+  	this.setUniform('visibleNodes', tex);
+
+  	this.treeType = getValid(parameters.treeType, TreeType.OCTREE);
+  	this.size = getValid(parameters.size, 1.0);
+  	this.minSize = getValid(parameters.minSize, 2.0);
+  	this.maxSize = getValid(parameters.maxSize, 50.0);
+
+  	this.newFormat = Boolean(parameters.newFormat);
+
+  	this.classification = DEFAULT_CLASSIFICATION;
+
+  	this.defaultAttributeValues.normal = [0, 0, 0];
+  	this.defaultAttributeValues.classification = [0, 0, 0];
+  	this.defaultAttributeValues.indices = [0, 0, 0, 0];
+
+  	this.vertexColors = true;
+	
+  	// throw new Error('Not implemented');
+  	// this.extensions.fragDepth = true;
+
+  	this.updateShaderSource();
+  }
+
+  dispose(): void 
+  {
+  	super.dispose();
+
+  	if (this.gradientTexture) 
+  	{
+  		this.gradientTexture.dispose();
+  		this.gradientTexture = undefined;
+  	}
+
+  	if (this.visibleNodesTexture) 
+  	{
+  		this.visibleNodesTexture.dispose();
+  		this.visibleNodesTexture = undefined;
+  	}
+
+  	this.clearVisibleNodeTextureOffsets();
+
+  	if (this.classificationTexture) 
+  	{
+  		this.classificationTexture.dispose();
+  		this.classificationTexture = undefined;
+  	}
+
+  	if (this.depthMap) 
+  	{
+  		this.depthMap.dispose();
+  		this.depthMap = undefined;
+  	}
+  }
+
+  clearVisibleNodeTextureOffsets(): void 
+  {
+  	this.visibleNodeTextureOffsets.clear();
+  }
+
+  updateShaderSource(): void 
+  {
+  	this.glslVersion = GLSL3;
+
+  	this.vertexShader = this.applyDefines(VertShader);
+  	this.fragmentShader = this.applyDefines(FragShader);
+
+  	if (this.opacity === 1.0) 
+  	{
+  		this.blending = NoBlending;
+  		this.transparent = false;
+  		this.depthTest = true;
+  		this.depthWrite = true;
+  		this.depthFunc = LessEqualDepth;
+  	}
+  	else if (this.opacity < 1.0 && !this.useEDL) 
+  	{
+  		this.blending = AdditiveBlending;
+  		this.transparent = true;
+  		this.depthTest = false;
+  		this.depthWrite = true;
+  	}
+
+  	if (this.weighted) 
+  	{
+  		this.blending = AdditiveBlending;
+  		this.transparent = true;
+  		this.depthTest = true;
+  		this.depthWrite = false;
+  		this.depthFunc = LessEqualDepth;
+  	}
+
+  	this.needsUpdate = true;
+  }
+
+  applyDefines(shaderSrc: string): string 
+  {
+  	const parts: string[] = [];
+
+  	function define(value: string | undefined) 
+  	{
+  		if (value) 
+  		{
+  			parts.push(`#define ${value}`);
+  		}
+  	}
+
+  	define(TREE_TYPE_DEFS[this.treeType]);
+  	define(SIZE_TYPE_DEFS[this.pointSizeType]);
+  	define(SHAPE_DEFS[this.shape]);
+  	define(COLOR_DEFS[this.pointColorType]);
+  	define(CLIP_MODE_DEFS[this.clipMode]);
+  	define(OPACITY_DEFS[this.pointOpacityType]);
+  	define(OUTPUT_COLOR_ENCODING[this.outputColorEncoding]);
+  	define(INPUT_COLOR_ENCODING[this.inputColorEncoding]);
+
+  	// We only perform gamma and brightness/contrast calculations per point if values are specified.
+  	if (
+  		this.rgbGamma !== DEFAULT_RGB_GAMMA ||
+	  this.rgbBrightness !== DEFAULT_RGB_BRIGHTNESS ||
+	  this.rgbContrast !== DEFAULT_RGB_CONTRAST
+  	) 
+  	{
+  		define('use_rgb_gamma_contrast_brightness');
+  	}
+
+  	if (this.useFilterByNormal) 
+  	{
+  		define('use_filter_by_normal');
+  	}
+
+  	if (this.useEDL) 
+  	{
+  		define('use_edl');
+  	}
+
+	if (this.useLogDepth) 
+	{
+		define('use_log_depth');
 	}
 
-	dispose(): void {
-		super.dispose();
+  	if (this.weighted) 
+  	{
+  		define('weighted_splats');
+  	}
 
-		if (this.gradientTexture) {
-			this.gradientTexture.dispose();
-			this.gradientTexture = undefined;
-		}
+  	if (this.numClipBoxes > 0) 
+  	{
+  		define('use_clip_box');
+  	}
 
-		if (this.visibleNodesTexture) {
-			this.visibleNodesTexture.dispose();
-			this.visibleNodesTexture = undefined;
-		}
+  	if (this.numClipSpheres > 0)
+  	{
+  		define('use_clip_sphere');
+  	}
 
-		this.clearVisibleNodeTextureOffsets();
+  	if (this.highlightPoint) 
+  	{
+  		define('highlight_point');
+  	}
 
-		if (this.classificationTexture) {
-			this.classificationTexture.dispose();
-			this.classificationTexture = undefined;
-		}
+  	define(`MAX_POINT_LIGHTS ${PointCloudMaterial.MAX_POINT_LIGHTS}`);
+  	define(`MAX_DIR_LIGHTS ${PointCloudMaterial.MAX_DIR_LIGHTS}`);
 
-		if (this.depthMap) {
-			this.depthMap.dispose();
-			this.depthMap = undefined;
-		}
+  	if (this.newFormat) 
+  	{
+  		define ('new_format');
+  	}
+
+
+  	// If '#version 300 es' exists as a line in shaderSrc, remove it and add it as the first element in the parts array
+  	const versionLine = shaderSrc.match(/^\s*#version\s+300\s+es\s*\n/);
+  	if (versionLine) 
+  	{
+  		parts.unshift(versionLine[0]);
+  		shaderSrc = shaderSrc.replace(versionLine[0], '');
+  	}
+  	parts.push(shaderSrc);
+  	return parts.join('\n');
+  }
+
+  setClipBoxes(clipBoxes: IClipBox[]): void 
+  {
+  	if (!clipBoxes) 
+  	{
+  		return;
+  	}
+
+  	this.clipBoxes = clipBoxes;
+
+  	const doUpdate =
+	  this.numClipBoxes !== clipBoxes.length && (clipBoxes.length === 0 || this.numClipBoxes === 0);
+
+  	this.numClipBoxes = clipBoxes.length;
+  	this.setUniform('clipBoxCount', this.numClipBoxes);
+
+  	if (doUpdate) 
+  	{
+  		this.updateShaderSource();
+  	}
+
+  	const clipBoxesLength = this.numClipBoxes * 16;
+  	const clipBoxesArray = new Float32Array(clipBoxesLength);
+
+  	for (let i = 0; i < this.numClipBoxes; i++) 
+  	{
+  		clipBoxesArray.set(clipBoxes[i].inverse.elements, 16 * i);
+  	}
+
+  	for (let i = 0; i < clipBoxesLength; i++) 
+  	{
+  		if (isNaN(clipBoxesArray[i])) 
+  		{
+  			clipBoxesArray[i] = Infinity;
+  		}
+  	}
+
+  	this.setUniform('clipBoxes', clipBoxesArray);
+  }
+
+  setClipSpheres(clipSpheres: IClipSphere[]): void
+  {
+  	if (!clipSpheres)
+  	{
+  		return;
+  	}
+
+  	this.clipSpheres = clipSpheres;
+
+  	const doUpdate =
+	  (this.numClipSpheres === 0) !== (clipSpheres.length === 0);
+
+  	this.numClipSpheres = clipSpheres.length;
+  	this.setUniform('clipSphereCount', this.numClipSpheres);
+
+  	if (doUpdate)
+  	{
+  		this.updateShaderSource();
+  	}
+
+  	const clipSpheresLength = this.numClipSpheres * 4;
+  	const clipSpheresArray = new Float32Array(clipSpheresLength);
+
+  	for (let i = 0; i < this.numClipSpheres; i++)
+  	{
+  		clipSpheresArray[i * 4 + 0] = clipSpheres[i].center.x;
+  		clipSpheresArray[i * 4 + 1] = clipSpheres[i].center.y;
+  		clipSpheresArray[i * 4 + 2] = clipSpheres[i].center.z;
+  		clipSpheresArray[i * 4 + 3] = clipSpheres[i].radius;
+  	}
+
+  	this.setUniform('clipSpheres', clipSpheresArray);
+  }
+
+  get gradient(): IGradient 
+  {
+  	return this._gradient;
+  }
+
+  set gradient(value: IGradient) 
+  {
+  	if (this._gradient !== value) 
+  	{
+  		this._gradient = value;
+  		this.gradientTexture = generateGradientTexture(this._gradient);
+  		this.setUniform('gradient', this.gradientTexture);
+  	}
+  }
+
+  get classification(): IClassification 
+  {
+  	return this._classification;
+  }
+
+  set classification(value: IClassification) 
+  {
+  	const copy: IClassification = {} as any;
+  	for (const key of Object.keys(value)) 
+  	{
+  		copy[key] = value[key].clone();
+  	}
+
+  	let isEqual = false;
+  	if (this._classification === undefined) 
+  	{
+  		isEqual = false;
+  	}
+  	else 
+  	{
+  		isEqual = Object.keys(copy).length === Object.keys(this._classification).length;
+
+  		for (const key of Object.keys(copy)) 
+  		{
+  			isEqual = isEqual && this._classification[key] !== undefined;
+  			isEqual = isEqual && copy[key].equals(this._classification[key]);
+  		}
+  	}
+
+  	if (!isEqual) 
+  	{
+  		this._classification = copy;
+  		this.recomputeClassification();
+  	}
+  }
+
+  private recomputeClassification(): void 
+  {
+  	this.classificationTexture = generateClassificationTexture(this._classification);
+  	this.setUniform('classificationLUT', this.classificationTexture);
+  }
+
+  get elevationRange(): [number, number] 
+  {
+  	return [this.heightMin, this.heightMax];
+  }
+
+  set elevationRange(value: [number, number]) 
+  {
+  	this.heightMin = value[0];
+  	this.heightMax = value[1];
+  }
+
+  getUniform<K extends keyof IPointCloudMaterialUniforms>(
+  	name: K,
+  ): IPointCloudMaterialUniforms[K]['value'] 
+  {
+  	return this.uniforms === undefined ? (undefined as any) : this.uniforms[name].value;
+  }
+
+  setUniform<K extends keyof IPointCloudMaterialUniforms>(
+  	name: K,
+  	value: IPointCloudMaterialUniforms[K]['value'],
+  ): void 
+  {
+  	if (this.uniforms === undefined) 
+  	{
+  		return;
+  	}
+
+  	const uObj = this.uniforms[name];
+
+  	if (uObj.type === 'c') 
+  	{
+  		(uObj.value as Color).copy(value as Color);
+  	}
+  	else if (value !== uObj.value) 
+  	{
+  		uObj.value = value;
+  	}
+  }
+
+  updateMaterial(
+  	octree: PointCloudOctree,
+  	visibleNodes: PointCloudOctreeNode[],
+  	camera: Camera,
+  	renderer: WebGLRenderer,
+  ): void 
+  {
+  	const pixelRatio = renderer.getPixelRatio();
+
+	this.useLogDepth = renderer.capabilities.logarithmicDepthBuffer;
+	octree.updateMatrixWorld(true);
+	this.updateElevationProjectionParams(octree);
+
+  	if (camera.type === PERSPECTIVE_CAMERA) 
+  	{
+  		this.useOrthographicCamera = false;
+  		this.fov = (camera as PerspectiveCamera).fov * (Math.PI / 180);
+		this.far = (camera as PerspectiveCamera).far;
+  	}
+  	else // ORTHOGRAPHIC
+  	{
+   		const orthoCamera = (camera as OrthographicCamera);
+  		this.useOrthographicCamera = true;
+  		this.orthoWidth = (orthoCamera.right - orthoCamera.left) / orthoCamera.zoom;
+  		this.orthoHeight = (orthoCamera.top - orthoCamera.bottom) / orthoCamera.zoom;
+  		this.fov = Math.PI / 2; // will result in slope = 1 in the shader
+		this.far = (camera as OrthographicCamera).far;
+  	}
+  	const renderTarget = renderer.getRenderTarget();
+  	if (renderTarget !== null && renderTarget instanceof WebGLRenderTarget) 
+  	{
+  		this.screenWidth = renderTarget.width;
+  		this.screenHeight = renderTarget.height;
+  	}
+  	else 
+  	{
+  		this.screenWidth = renderer.domElement.clientWidth * pixelRatio;
+  		this.screenHeight = renderer.domElement.clientHeight * pixelRatio;
+  	}
+
+
+  	const maxScale = Math.max(octree.scale.x, octree.scale.y, octree.scale.z);
+  	this.spacing = octree.pcoGeometry.spacing * maxScale;
+  	this.octreeSize = octree.pcoGeometry.boundingBox.getSize(PointCloudMaterial.helperVec3).x;
+	const view = (camera as any).view;
+	if (view?.enabled) {
+		this.viewScale = view.fullWidth / view.width;
+	} else {
+		this.viewScale = 1.0;
 	}
 
-	clearVisibleNodeTextureOffsets(): void {
-		this.visibleNodeTextureOffsets.clear();
-	}
+  	if (
+  		this.pointSizeType === PointSizeType.ADAPTIVE ||
+	  this.pointColorType === PointColorType.LOD
+  	) 
+  	{
+  		this.updateVisibilityTextureData(visibleNodes);
+  	}
+  }
 
-	updateShaderSource(): void {
-		this.glslVersion = GLSL3;
-
-		this.vertexShader = this.applyDefines(VertShader);
-		this.fragmentShader = this.applyDefines(FragShader);
-
-		if (this.opacity === 1.0) {
-			this.blending = NoBlending;
-			this.transparent = false;
-			this.depthTest = true;
-			this.depthWrite = true;
-			this.depthFunc = LessEqualDepth;
-		}
-		else if (this.opacity < 1.0 && !this.useEDL) {
-			this.blending = AdditiveBlending;
-			this.transparent = true;
-			this.depthTest = false;
-			this.depthWrite = true;
-		}
-
-		if (this.weighted) {
-			this.blending = AdditiveBlending;
-			this.transparent = true;
-			this.depthTest = true;
-			this.depthWrite = false;
-			this.depthFunc = LessEqualDepth;
-		}
-
-		this.needsUpdate = true;
-	}
-
-	applyDefines(shaderSrc: string): string {
-		const parts: string[] = [];
-
-		function define(value: string | undefined) {
-			if (value) {
-				parts.push(`#define ${value}`);
-			}
-		}
-
-		define(TREE_TYPE_DEFS[this.treeType]);
-		define(SIZE_TYPE_DEFS[this.pointSizeType]);
-		define(SHAPE_DEFS[this.shape]);
-		define(COLOR_DEFS[this.pointColorType]);
-		define(CLIP_MODE_DEFS[this.clipMode]);
-		define(OPACITY_DEFS[this.pointOpacityType]);
-		define(OUTPUT_COLOR_ENCODING[this.outputColorEncoding]);
-		define(INPUT_COLOR_ENCODING[this.inputColorEncoding]);
-
-		// We only perform gamma and brightness/contrast calculations per point if values are specified.
-		if (
-			this.rgbGamma !== DEFAULT_RGB_GAMMA ||
-			this.rgbBrightness !== DEFAULT_RGB_BRIGHTNESS ||
-			this.rgbContrast !== DEFAULT_RGB_CONTRAST
-		) {
-			define('use_rgb_gamma_contrast_brightness');
-		}
-
-		if (this.useFilterByNormal) {
-			define('use_filter_by_normal');
-		}
-
-		if (this.useEDL) {
-			define('use_edl');
-		}
-
-		if (this.useLogDepth) {
-			define('use_log_depth');
-		}
-
-		if (this.useReversedDepth) {
-			define('use_reversed_depth');
-		}
-
-		if (this.weighted) {
-			define('weighted_splats');
-		}
-
-		if (this.numClipBoxes > 0) {
-			define('use_clip_box');
-		}
-
-		if (this.numClipSpheres > 0) {
-			define('use_clip_sphere');
-		}
-
-		if (this.numClipPlanes > 0) {
-			define('use_clip_plane');
-		}
-
-		if (this.highlightPoint) {
-			define('highlight_point');
-		}
-
-		define('MAX_POINT_LIGHTS 0');
-		define('MAX_DIR_LIGHTS 0');
-
-		if (this.newFormat) {
-			define('new_format');
-		}
-
-
-		// If '#version 300 es' exists as a line in shaderSrc, remove it and add it as the first element in the parts array
-		const versionLine = shaderSrc.match(/^\s*#version\s+300\s+es\s*\n/);
-		if (versionLine) {
-			parts.unshift(versionLine[0]);
-			shaderSrc = shaderSrc.replace(versionLine[0], '');
-		}
-		parts.push(shaderSrc);
-		return parts.join('\n');
-	}
-
-	setClipBoxes(clipBoxes: IClipBox[]): void {
-		if (!clipBoxes) {
-			return;
-		}
-
-		this.clipBoxes = clipBoxes;
-
-		const doUpdate =
-			this.numClipBoxes !== clipBoxes.length && (clipBoxes.length === 0 || this.numClipBoxes === 0);
-
-		this.numClipBoxes = clipBoxes.length;
-		this.setUniform('clipBoxCount', this.numClipBoxes);
-
-		if (doUpdate) {
-			this.updateShaderSource();
-		}
-
-		const clipBoxesLength = this.numClipBoxes * 16;
-		const clipBoxesArray = new Float32Array(clipBoxesLength);
-
-		for (let i = 0; i < this.numClipBoxes; i++) {
-			clipBoxesArray.set(clipBoxes[i].inverse.elements, 16 * i);
-		}
-
-		for (let i = 0; i < clipBoxesLength; i++) {
-			if (isNaN(clipBoxesArray[i])) {
-				clipBoxesArray[i] = Infinity;
-			}
-		}
-
-		this.setUniform('clipBoxes', clipBoxesArray);
-	}
-
-	setClipSpheres(clipSpheres: IClipSphere[]): void {
-		if (!clipSpheres) {
-			return;
-		}
-
-		this.clipSpheres = clipSpheres;
-
-		const doUpdate =
-			(this.numClipSpheres === 0) !== (clipSpheres.length === 0);
-
-		this.numClipSpheres = clipSpheres.length;
-		this.setUniform('clipSphereCount', this.numClipSpheres);
-
-		if (doUpdate) {
-			this.updateShaderSource();
-		}
-
-		const clipSpheresLength = this.numClipSpheres * 4;
-		const clipSpheresArray = new Float32Array(clipSpheresLength);
-
-		for (let i = 0; i < this.numClipSpheres; i++) {
-			clipSpheresArray[i * 4 + 0] = clipSpheres[i].center.x;
-			clipSpheresArray[i * 4 + 1] = clipSpheres[i].center.y;
-			clipSpheresArray[i * 4 + 2] = clipSpheres[i].center.z;
-			clipSpheresArray[i * 4 + 3] = clipSpheres[i].radius;
-		}
-
-		this.setUniform('clipSpheres', clipSpheresArray);
-	}
-
-	/**
-	 * Syncs the inherited `clippingPlanes` property to internal shader uniforms.
-	 * Called automatically each frame from `updateMaterial()`.
-	 */
-	private syncClippingPlanes(): void {
-		const planes = this.clippingPlanes;
-		const count = (planes && planes.length) ? planes.length : 0;
-
-		//Only update shader source if we transition between having clipping planes and not having clipping planes.
-		//The shader only needs to know whether clipping planes are in use.
-		const doUpdate = (this.numClipPlanes === 0) !== (count === 0);
-		if (doUpdate) {
-			this.updateShaderSource();
-		}
-
-		this.numClipPlanes = count;
-		this.setUniform('clipPlaneCount', count);
-
-		// If there are clipping planes, update shader uniforms each frame with their positions.
-		if (count > 0 && planes) {
-			const arr = new Float32Array(count * 4);
-			for (let i = 0; i < count; i++) {
-				arr[i * 4 + 0] = planes[i].normal.x;
-				arr[i * 4 + 1] = planes[i].normal.y;
-				arr[i * 4 + 2] = planes[i].normal.z;
-				arr[i * 4 + 3] = planes[i].constant;
-			}
-			this.setUniform('clipPlanes', arr);
-		}
-	}
-
-	get gradient(): IGradient {
-		return this._gradient;
-	}
-
-	set gradient(value: IGradient) {
-		if (this._gradient !== value) {
-			this._gradient = value;
-			this.gradientTexture = generateGradientTexture(this._gradient);
-			this.setUniform('gradient', this.gradientTexture);
-		}
-	}
-
-	get classification(): IClassification {
-		return this._classification;
-	}
-
-	set classification(value: IClassification) {
-		const copy: IClassification = {} as any;
-		for (const key of Object.keys(value)) {
-			copy[key] = value[key].clone();
-		}
-
-		let isEqual = false;
-		if (this._classification === undefined) {
-			isEqual = false;
-		}
-		else {
-			isEqual = Object.keys(copy).length === Object.keys(this._classification).length;
-
-			for (const key of Object.keys(copy)) {
-				isEqual = isEqual && this._classification[key] !== undefined;
-				isEqual = isEqual && copy[key].equals(this._classification[key]);
-			}
-		}
-
-		if (!isEqual) {
-			this._classification = copy;
-			this.recomputeClassification();
-		}
-	}
-
-	private recomputeClassification(): void {
-		this.classificationTexture = generateClassificationTexture(this._classification);
-		this.setUniform('classificationLUT', this.classificationTexture);
-	}
-
-	get elevationRange(): [number, number] {
-		return [this.heightMin, this.heightMax];
-	}
-
-	set elevationRange(value: [number, number]) {
-		this.heightMin = value[0];
-		this.heightMax = value[1];
-	}
-
-	getUniform<K extends keyof IPointCloudMaterialUniforms>(
-		name: K,
-	): IPointCloudMaterialUniforms[K]['value'] {
-		return this.uniforms === undefined ? (undefined as any) : this.uniforms[name].value;
-	}
-
-	setUniform<K extends keyof IPointCloudMaterialUniforms>(
-		name: K,
-		value: IPointCloudMaterialUniforms[K]['value'],
-	): void {
-		if (this.uniforms === undefined) {
-			return;
-		}
-
-		const uObj = this.uniforms[name];
-
-		if (uObj.type === 'c') {
-			(uObj.value as Color).copy(value as Color);
-		}
-		else if (value !== uObj.value) {
-			uObj.value = value;
-		}
-	}
-
-	updateMaterial(
-		octree: PointCloudOctree,
-		visibleNodes: PointCloudOctreeNode[],
-		camera: Camera,
-		renderer: WebGLRenderer,
-	): void {
-		const pixelRatio = renderer.getPixelRatio();
-
-		// Sync clipping planes to shader uniforms
-		this.syncClippingPlanes();
-
-		const capabilities = renderer.capabilities as typeof renderer.capabilities & {
-			reversedDepthBuffer?: boolean;
-			reverseDepthBuffer?: boolean;
-		};
-		const useReversedDepth = capabilities.reversedDepthBuffer === true || capabilities.reverseDepthBuffer === true;
-
-		this.useReversedDepth = useReversedDepth;
-		this.useLogDepth = renderer.capabilities.logarithmicDepthBuffer && !useReversedDepth;
-
-		if (camera.type === PERSPECTIVE_CAMERA) {
-			this.useOrthographicCamera = false;
-			this.fov = (camera as PerspectiveCamera).fov * (Math.PI / 180);
-			this.far = (camera as PerspectiveCamera).far;
-		}
-		else // ORTHOGRAPHIC
+	private updateElevationProjectionParams(octree: PointCloudOctree): void
+	{
+		const matrixElements = octree.matrixWorld.elements;
+		const axisLocal = this.elevationAxisLocal;
+		const matrixChanged = !this.hasElevationCache || this.cachedMatrixWorldElements.some((value, index) => {
+			return value !== matrixElements[index];
+		});
+		const axisChanged = !this.hasElevationCache || !this.cachedElevationAxisLocal.equals(axisLocal);
+		if (!matrixChanged && !axisChanged)
 		{
-			const orthoCamera = (camera as OrthographicCamera);
-			this.useOrthographicCamera = true;
-			this.orthoWidth = (orthoCamera.right - orthoCamera.left) / orthoCamera.zoom;
-			this.orthoHeight = (orthoCamera.top - orthoCamera.bottom) / orthoCamera.zoom;
-			this.fov = Math.PI / 2; // will result in slope = 1 in the shader
-			this.far = (camera as OrthographicCamera).far;
-		}
-		const renderTarget = renderer.getRenderTarget();
-		if (renderTarget !== null && renderTarget instanceof WebGLRenderTarget) {
-			this.screenWidth = renderTarget.width;
-			this.screenHeight = renderTarget.height;
-		}
-		else {
-			this.screenWidth = renderer.domElement.clientWidth * pixelRatio;
-			this.screenHeight = renderer.domElement.clientHeight * pixelRatio;
+			return;
 		}
 
+		this.cachedMatrixWorldElements.set(matrixElements);
+		this.cachedElevationAxisLocal.copy(axisLocal);
+		this.hasElevationCache = true;
 
-		const maxScale = Math.max(octree.scale.x, octree.scale.y, octree.scale.z);
-		this.spacing = octree.pcoGeometry.spacing * maxScale;
-		this.octreeSize = octree.pcoGeometry.boundingBox.getSize(PointCloudMaterial.helperVec3).x;
-		const view = (camera as any).view;
-		if (view?.enabled) {
-			this.viewScale = view.fullWidth / view.width;
-		} else {
-			this.viewScale = 1.0;
+		const axis = PointCloudMaterial.helperAxis.copy(axisLocal);
+		if (axis.lengthSq() < 1e-12) 
+		{
+			axis.set(0, 0, 1);
 		}
+		axis.normalize();
+		axis.applyMatrix3(PointCloudMaterial.helperMat3.getNormalMatrix(octree.matrixWorld));
+		if (axis.lengthSq() < 1e-12)
+		{
+			axis.set(0, 0, 1);
+		}
+		else
+		{
+			axis.normalize();
+		}
+		this.elevationAxis = [axis.x, axis.y, axis.z];
 
-		if (
-			this.pointSizeType === PointSizeType.ADAPTIVE ||
-			this.pointColorType === PointColorType.LOD
-		) {
-			this.updateVisibilityTextureData(visibleNodes);
+		const bbox = octree.pcoGeometry.tightBoundingBox || octree.pcoGeometry.boundingBox;
+		const min = bbox.min;
+		const max = bbox.max;
+		let minProjection = Infinity;
+		let maxProjection = -Infinity;
+		for (let i = 0; i < 8; i++)
+		{
+			PointCloudMaterial.helperCorner.set(
+				(i & 0b001) !== 0 ? max.x : min.x,
+				(i & 0b010) !== 0 ? max.y : min.y,
+				(i & 0b100) !== 0 ? max.z : min.z,
+			).applyMatrix4(octree.matrixWorld);
+			const projection = PointCloudMaterial.helperCorner.dot(axis);
+			minProjection = Math.min(minProjection, projection);
+			maxProjection = Math.max(maxProjection, projection);
 		}
+		const projectionRange = Math.max(maxProjection - minProjection, 1e-6);
+		this.heightMin = minProjection - 0.2 * projectionRange;
+		this.heightMax = maxProjection + 0.2 * projectionRange;
 	}
 
-	private updateVisibilityTextureData(nodes: PointCloudOctreeNode[]) {
-		nodes.sort(byLevelAndIndex);
+  private updateVisibilityTextureData(nodes: PointCloudOctreeNode[]) 
+  {
+  	nodes.sort(byLevelAndIndex);
 
-		const data = new Uint8Array(nodes.length * 4);
-		const offsetsToChild = new Array(nodes.length).fill(Infinity);
+  	const data = new Uint8Array(nodes.length * 4);
+  	const offsetsToChild = new Array(nodes.length).fill(Infinity);
 
-		this.visibleNodeTextureOffsets.clear();
+  	this.visibleNodeTextureOffsets.clear();
 
-		for (let i = 0; i < nodes.length; i++) {
-			const node = nodes[i];
+  	for (let i = 0; i < nodes.length; i++) 
+  	{
+  		const node = nodes[i];
 
-			this.visibleNodeTextureOffsets.set(node.name, i);
+  		this.visibleNodeTextureOffsets.set(node.name, i);
 
-			if (i > 0) {
-				const parentName = node.name.slice(0, -1);
-				const parentOffset = this.visibleNodeTextureOffsets.get(parentName)!;
-				const parentOffsetToChild = i - parentOffset;
+  		if (i > 0) 
+  		{
+  			const parentName = node.name.slice(0, -1);
+  			const parentOffset = this.visibleNodeTextureOffsets.get(parentName)!;
+  			const parentOffsetToChild = i - parentOffset;
 
-				offsetsToChild[parentOffset] = Math.min(offsetsToChild[parentOffset], parentOffsetToChild);
+  			offsetsToChild[parentOffset] = Math.min(offsetsToChild[parentOffset], parentOffsetToChild);
 
-				// tslint:disable:no-bitwise
-				const offset = parentOffset * 4;
-				data[offset] = data[offset] | 1 << node.index;
-				data[offset + 1] = offsetsToChild[parentOffset] >> 8;
-				data[offset + 2] = offsetsToChild[parentOffset] % 256;
-				// tslint:enable:no-bitwise
-			}
+  			// tslint:disable:no-bitwise
+  			const offset = parentOffset * 4;
+  			data[offset] = data[offset] | 1 << node.index;
+  			data[offset + 1] = offsetsToChild[parentOffset] >> 8;
+  			data[offset + 2] = offsetsToChild[parentOffset] % 256;
+  			// tslint:enable:no-bitwise
+  		}
 
-			data[i * 4 + 3] = node.name.length;
-		}
+  		data[i * 4 + 3] = node.name.length;
+  	}
 
-		const texture = this.visibleNodesTexture;
-		if (texture) {
-			texture.image.data.set(data);
-			texture.needsUpdate = true;
-		}
-	}
+  	const texture = this.visibleNodesTexture;
+  	if (texture) 
+  	{
+  		texture.image.data.set(data);
+  		texture.needsUpdate = true;
+  	}
+  }
 
-	static makeOnBeforeRender(
-		octree: PointCloudOctree,
-		node: PointCloudOctreeNode,
-		pcIndex?: number,
-	) {
-		return (
-			_renderer: WebGLRenderer,
-			_scene: Scene,
-			_camera: Camera,
-			_geometry: BufferGeometry,
-			material: Material,
-		) => {
+  static makeOnBeforeRender(
+  	octree: PointCloudOctree,
+  	node: PointCloudOctreeNode,
+  	pcIndex?: number,
+  ) 
+  {
+  	return (
+  		_renderer: WebGLRenderer,
+  		_scene: Scene,
+  		_camera: Camera,
+  		_geometry: BufferGeometry,
+  		material: Material,
+  	) => 
+  	{
 			if (material instanceof PointCloudMaterial) {
+				material.updateLightUniforms(_renderer, _scene, _camera);
+
 				const materialUniforms = material.uniforms;
 
 				materialUniforms.level.value = node.level;
 				materialUniforms.isLeafNode.value = node.isLeafNode;
 
 				const vnStart = material.visibleNodeTextureOffsets.get(node.name);
-				if (vnStart !== undefined) {
+				if (vnStart !== undefined)
+				{
 					materialUniforms.vnStart.value = vnStart;
 				}
 
 				materialUniforms.pcIndex.value =
-					pcIndex !== undefined ? pcIndex : octree.visibleNodes.indexOf(node);
+				pcIndex !== undefined ? pcIndex : octree.visibleNodes.indexOf(node);
 
 				// Remove the cast to any after updating to Three.JS >= r113
 				(material as RawShaderMaterial).uniformsNeedUpdate = true;
 			}
 		};
+  }
+
+	private updateLightUniforms(
+		renderer: WebGLRenderer,
+		scene: Scene,
+		camera: Camera,
+	): void
+	{
+		const frame = renderer.info.render.frame;
+		if (
+			this.cachedLightFrame === frame &&
+			this.cachedLightSceneId === scene.id &&
+			this.cachedLightCameraId === camera.id
+		)
+		{
+			return;
+		}
+
+		this.cachedLightFrame = frame;
+		this.cachedLightSceneId = scene.id;
+		this.cachedLightCameraId = camera.id;
+
+		const ambient = [0, 0, 0] as [number, number, number];
+		let dirCount = 0;
+		let pointCount = 0;
+		const dirDirections = this.directionalLightDirections;
+		const dirColors = this.directionalLightColors;
+		const pointPositions = this.pointLightPositions;
+		const pointColors = this.pointLightColors;
+		const pointRanges = this.pointLightRanges;
+
+		PointCloudMaterial.helperCameraMat3.setFromMatrix4(camera.matrixWorldInverse);
+
+		scene.traverseVisible((object) => {
+			if (!('isLight' in object) || !(object as any).isLight)
+			{
+				return;
+			}
+
+			const light = object as AmbientLight | DirectionalLight | PointLight;
+			if (!light.visible || light.intensity <= 0)
+			{
+				return;
+			}
+			if (!light.layers.test(camera.layers))
+			{
+				return;
+			}
+
+			const lr = light.color.r * light.intensity;
+			const lg = light.color.g * light.intensity;
+			const lb = light.color.b * light.intensity;
+
+			if ((light as AmbientLight).isAmbientLight)
+			{
+				ambient[0] += lr;
+				ambient[1] += lg;
+				ambient[2] += lb;
+				return;
+			}
+
+			if ((light as DirectionalLight).isDirectionalLight)
+			{
+				if (dirCount >= PointCloudMaterial.MAX_DIR_LIGHTS)
+				{
+					return;
+				}
+
+				const directional = light as DirectionalLight;
+				directional.updateMatrixWorld();
+				directional.target.updateMatrixWorld();
+				directional.getWorldPosition(PointCloudMaterial.helperLightPos);
+				directional.target.getWorldPosition(PointCloudMaterial.helperLightTargetPos);
+				PointCloudMaterial.helperLightDir
+					.subVectors(PointCloudMaterial.helperLightPos, PointCloudMaterial.helperLightTargetPos)
+					.normalize()
+					.applyMatrix3(PointCloudMaterial.helperCameraMat3)
+					.normalize();
+
+				const di = dirCount * 3;
+				dirDirections[di + 0] = PointCloudMaterial.helperLightDir.x;
+				dirDirections[di + 1] = PointCloudMaterial.helperLightDir.y;
+				dirDirections[di + 2] = PointCloudMaterial.helperLightDir.z;
+				dirColors[di + 0] = lr;
+				dirColors[di + 1] = lg;
+				dirColors[di + 2] = lb;
+				dirCount++;
+				return;
+			}
+
+			if ((light as any).isPointLight)
+			{
+				if (pointCount >= PointCloudMaterial.MAX_POINT_LIGHTS)
+				{
+					return;
+				}
+
+				const point = light as PointLight;
+				point.updateMatrixWorld();
+				point.getWorldPosition(PointCloudMaterial.helperLightPos);
+				PointCloudMaterial.helperLightPos.applyMatrix4(camera.matrixWorldInverse);
+
+				const pi = pointCount * 3;
+				pointPositions[pi + 0] = PointCloudMaterial.helperLightPos.x;
+				pointPositions[pi + 1] = PointCloudMaterial.helperLightPos.y;
+				pointPositions[pi + 2] = PointCloudMaterial.helperLightPos.z;
+				pointColors[pi + 0] = lr;
+				pointColors[pi + 1] = lg;
+				pointColors[pi + 2] = lb;
+				pointRanges[pointCount] = point.distance > 0 ? point.distance : 0;
+				pointCount++;
+			}
+		});
+
+		this.ambientLightColor = ambient;
+		this.numDirectionalLights = dirCount;
+		this.numPointLights = pointCount;
 	}
 }
 
-function makeUniform<T>(type: string, value: T): IUniform<T> {
-	return { type: type, value: value };
+function makeUniform<T>(type: string, value: T): IUniform<T> 
+{
+	return {type: type, value: value};
 }
 
-function getValid<T>(a: T | undefined, b: T): T {
+function getValid<T>(a: T | undefined, b: T): T 
+{
 	return a === undefined ? b : a;
 }
 
@@ -962,16 +1223,22 @@ function getValid<T>(a: T | undefined, b: T): T {
 function uniform<K extends keyof IPointCloudMaterialUniforms>(
 	uniformName: K,
 	requireSrcUpdate: boolean = false,
-): PropertyDecorator {
-	return (target: Object, propertyKey: string | symbol): void => {
+): PropertyDecorator 
+{
+	return (target: Object, propertyKey: string | symbol): void => 
+	{
 		Object.defineProperty(target, propertyKey, {
-			get: function () {
+			get: function() 
+			{
 				return this.getUniform(uniformName);
 			},
-			set: function (value: any) {
-				if (value !== this.getUniform(uniformName)) {
+			set: function(value: any) 
+			{
+				if (value !== this.getUniform(uniformName)) 
+				{
 					this.setUniform(uniformName, value);
-					if (requireSrcUpdate) {
+					if (requireSrcUpdate) 
+					{
 						this.updateShaderSource();
 					}
 				}
@@ -980,16 +1247,21 @@ function uniform<K extends keyof IPointCloudMaterialUniforms>(
 	};
 }
 
-function requiresShaderUpdate() {
-	return (target: Object, propertyKey: string | symbol): void => {
+function requiresShaderUpdate() 
+{
+	return (target: Object, propertyKey: string | symbol): void => 
+	{
 		const fieldName = `_${propertyKey.toString()}`;
 
 		Object.defineProperty(target, propertyKey, {
-			get: function () {
+			get: function() 
+			{
 				return this[fieldName];
 			},
-			set: function (value: any) {
-				if (value !== this[fieldName]) {
+			set: function(value: any) 
+			{
+				if (value !== this[fieldName]) 
+				{
 					this[fieldName] = value;
 					this.updateShaderSource();
 				}

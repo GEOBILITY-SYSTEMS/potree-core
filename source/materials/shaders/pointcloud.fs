@@ -17,6 +17,14 @@ uniform float screenWidth;
 uniform float screenHeight;
 uniform float far;
 uniform sampler2D depthMap;
+uniform vec3 ambientLightColor;
+uniform int numDirectionalLights;
+uniform int numPointLights;
+uniform vec3 directionalLightDirections[MAX_DIR_LIGHTS];
+uniform vec3 directionalLightColors[MAX_DIR_LIGHTS];
+uniform vec3 pointLightPositions[MAX_POINT_LIGHTS];
+uniform vec3 pointLightColors[MAX_POINT_LIGHTS];
+uniform float pointLightRanges[MAX_POINT_LIGHTS];
 
 out vec4 fragColor;
 
@@ -25,11 +33,7 @@ out vec4 fragColor;
 	uniform vec4 highlightedPointColor;
 #endif
 
-#ifdef new_format
-	in vec4 vColor;
-#else
-	in vec3 vColor;
-#endif
+in vec3 vColor;
 
 #if !defined(color_type_point_index)
 	// Opacity attribute when not using point index color type
@@ -49,7 +53,7 @@ in vec3 vViewPosition;
 	in float vRadius;
 #endif
 
-#if defined(color_type_phong) && (MAX_POINT_LIGHTS > 0 || MAX_DIR_LIGHTS > 0)
+#if defined(color_type_phong)
 	// Normal for Phong shading
 	in vec3 vNormal;
 #endif
@@ -62,13 +66,7 @@ in vec3 vViewPosition;
 const float specularStrength = 1.0;
 
 void main() {
-	// Choose the proper color format
-	#ifdef new_format
-		vec3 actualColor = vColor.xyz;
-	#else
-		vec3 actualColor = vColor;
-	#endif
-	vec3 color = actualColor;
+	vec3 color = vColor;
 
 	// Precompute normalized point coordinate if needed
 	#if defined(circle_point_shape) || defined(paraboloid_point_shape) || defined(weighted_splats)
@@ -99,69 +97,63 @@ void main() {
 
 	// Lighting calculations for Phong shading
 	#if defined(color_type_phong)
-		#if MAX_POINT_LIGHTS > 0 || MAX_DIR_LIGHTS > 0
-			vec3 normal = normalize(vNormal);
-			normal.z = abs(normal.z);
-			vec3 viewDir = normalize(vViewPosition);
-		#endif
+		float normalLength = length(vNormal);
+		vec3 normal = normalLength > 0.0 ? vNormal / normalLength : vec3(0.0, 0.0, 1.0);
+		normal.z = abs(normal.z);
+		vec3 viewDir = normalize(-vViewPosition);
+		vec3 diffuseTerm = ambientLightColor;
+		vec3 specularTerm = vec3(0.0);
+		const float shininess = 32.0;
+		const float pointSpecularScale = 0.2;
+		const float directionalSpecularScale = 0.2;
 
-		#if MAX_POINT_LIGHTS > 0
-			vec3 pointDiffuse = vec3(0.0);
-			// Loop through each point light
-			for(int i = 0; i < MAX_POINT_LIGHTS; i++) {
-				vec4 lPos = viewMatrix * vec4(pointLightPosition[i], 1.0);
-				vec3 lVector = normalize(lPos.xyz + vViewPosition);
-				float lDistance = (pointLightDistance[i] > 0.0)
-					? 1.0 - min(length(lVector)/pointLightDistance[i], 1.0)
-					: 1.0;
-				float dotVal = dot(normal, lVector);
-				#ifdef WRAP_AROUND
-					// Use wrap around lighting if enabled
-					float fullW = max(dotVal, 0.0);
-					float halfW = max(0.5 * dotVal + 0.5, 0.0);
-					float diffuseW = mix(fullW, halfW, wrapRGB);
-				#else
-					float diffuseW = max(dotVal, 0.0);
-				#endif
-				pointDiffuse += diffuse * pointLightColor[i] * diffuseW * lDistance;
+		for (int i = 0; i < MAX_DIR_LIGHTS; i++)
+		{
+			if (i >= numDirectionalLights)
+			{
+				break;
 			}
-		#endif
 
-		#if MAX_DIR_LIGHTS > 0
-			vec3 dirDiffuse = vec3(0.0);
-			vec3 dirSpecular = vec3(0.0);
-			// Loop through each directional light
-			for(int i = 0; i < MAX_DIR_LIGHTS; i++) {
-				vec4 lDir = viewMatrix * vec4(directionalLightDirection[i], 0.0);
-				vec3 dVector = normalize(lDir.xyz);
-				float dotVal = dot(normal, dVector);
-				#ifdef WRAP_AROUND
-					float fullW = max(dotVal, 0.0);
-					float halfW = max(0.5 * dotVal + 0.5, 0.0);
-					float diffuseW = mix(fullW, halfW, wrapRGB);
-				#else
-					float diffuseW = max(dotVal, 0.0);
-				#endif
-				dirDiffuse += diffuse * directionalLightColor[i] * diffuseW;
-				vec3 halfVec = normalize(dVector + viewDir);
-				float specW = specularStrength * max(pow(max(dot(normal, halfVec), 0.0), shininess), 0.0);
-				float normFactor = (shininess + 2.0) / 8.0;
-				vec3 schlick = specular + (vec3(1.0)-specular)*pow(max(1.0-dot(dVector, halfVec), 0.0), 5.0);
-				dirSpecular += schlick * directionalLightColor[i] * specW * diffuseW * normFactor;
+			vec3 lightDir = normalize(directionalLightDirections[i]);
+			float diffuseWeight = max(dot(normal, lightDir), 0.0);
+			diffuseTerm += directionalLightColors[i] * diffuseWeight;
+
+			vec3 halfVec = normalize(lightDir + viewDir);
+			float specularWeight = specularStrength * pow(max(dot(normal, halfVec), 0.0), shininess);
+			specularTerm += directionalLightColors[i] * (directionalSpecularScale * specularWeight);
+		}
+
+		for (int i = 0; i < MAX_POINT_LIGHTS; i++)
+		{
+			if (i >= numPointLights)
+			{
+				break;
 			}
-		#endif
 
-		// Combine lighting contributions from both light types
-		vec3 totalDiffuse = vec3(0.0);
-		vec3 totalSpecular = vec3(0.0);
-		#if MAX_POINT_LIGHTS > 0
-			totalDiffuse += pointDiffuse;
-		#endif
-		#if MAX_DIR_LIGHTS > 0
-			totalDiffuse += dirDiffuse;
-			totalSpecular += dirSpecular;
-		#endif
-		fragColor.rgb = fragColor.rgb * (emissive + totalDiffuse + ambientLightColor * ambient) + totalSpecular;
+			vec3 lightVector = pointLightPositions[i] - vViewPosition;
+			float lightDistance = length(lightVector);
+			if (lightDistance <= 0.0)
+			{
+				continue;
+			}
+
+			vec3 lightDir = lightVector / lightDistance;
+			float attenuation = 1.0;
+			float range = pointLightRanges[i];
+			if (range > 0.0)
+			{
+				attenuation = max(1.0 - lightDistance / range, 0.0);
+			}
+
+			float diffuseWeight = max(dot(normal, lightDir), 0.0);
+			diffuseTerm += pointLightColors[i] * (diffuseWeight * attenuation);
+
+			vec3 halfVec = normalize(lightDir + viewDir);
+			float specularWeight = specularStrength * pow(max(dot(normal, halfVec), 0.0), shininess);
+			specularTerm += pointLightColors[i] * (pointSpecularScale * specularWeight * attenuation);
+		}
+
+		fragColor.rgb = fragColor.rgb * diffuseTerm + specularTerm;
 	#endif
 
 	// Compute depth from view position
@@ -193,9 +185,11 @@ void main() {
 	gl_FragDepth = fragmentDepth;
 
 	#if defined(color_type_depth)
-		// Render depth information into color channels
-		fragColor.r = linearDepth;
-		fragColor.g = clipPos.z;
+		// Stable near->far coloring (near=purple, far=yellow)
+		float depth01 = clamp(linearDepth / max(far, 1e-6), 0.0, 1.0);
+		vec3 nearDepthColor = vec3(0.36, 0.18, 0.64);
+		vec3 farDepthColor = vec3(1.0, 0.92, 0.23);
+		fragColor.rgb = mix(nearDepthColor, farDepthColor, depth01);
 	#endif
 
 	#if defined(use_edl)
