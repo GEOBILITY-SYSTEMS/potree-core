@@ -1,7 +1,7 @@
 import { BufferGeometry, Camera, Color, Material, RawShaderMaterial, Scene, Texture, Vector3, Vector4, WebGLRenderer } from 'three';
 import { PointCloudOctree } from '../point-cloud-octree';
 import { PointCloudOctreeNode } from '../point-cloud-octree-node';
-import { ClipMode, IClipBox, IClipSphere } from './clipping';
+import { ClipMode, ClipVolumeMode, IClipBox, IClipSphere } from './clipping';
 import { PointColorType, PointOpacityType, PointShape, PointSizeType, TreeType } from './enums';
 import { IClassification, IGradient, IUniform } from './types';
 import { ColorEncoding } from './color-encoding';
@@ -68,13 +68,13 @@ export interface IPointCloudMaterialUniforms {
     clipBoxCount: IUniform<number>;
     /** Array containing clipping box parameters */
     clipBoxes: IUniform<Float32Array>;
-    /** Array containing clipping box modes (0 = include, 1 = exclude) */
+    /** Array containing clipping box modes (0 = include, 1 = exclude, 2 = inherit global mode) */
     clipBoxModes: IUniform<Float32Array>;
     /** Number of active clipping spheres */
     clipSphereCount: IUniform<number>;
     /** Array containing clipping sphere parameters (vec4: xyz=center, w=radius) */
     clipSpheres: IUniform<Float32Array>;
-    /** Array containing clipping sphere modes (0 = include, 1 = exclude) */
+    /** Array containing clipping sphere modes (0 = include, 1 = exclude, 2 = inherit global mode) */
     clipSphereModes: IUniform<Float32Array>;
     /** Number of active clipping planes */
     clipPlaneCount: IUniform<number>;
@@ -176,6 +176,9 @@ export interface IPointCloudMaterialUniforms {
 export declare class PointCloudMaterial extends RawShaderMaterial {
     private static readonly MAX_POINT_LIGHTS;
     private static readonly MAX_DIR_LIGHTS;
+    private static readonly CLIP_VOLUME_MODE_INCLUDE;
+    private static readonly CLIP_VOLUME_MODE_EXCLUDE;
+    private static readonly CLIP_VOLUME_MODE_INHERIT;
     private static helperVec3;
     private static helperAxis;
     private static helperCorner;
@@ -190,7 +193,6 @@ export declare class PointCloudMaterial extends RawShaderMaterial {
     clipBoxes: IClipBox[];
     numClipSpheres: number;
     clipSpheres: IClipSphere[];
-    private hasPerClipVolumeModes;
     private numClipPlanes;
     visibleNodesTexture: Texture | undefined;
     private visibleNodeTextureOffsets;
@@ -317,9 +319,13 @@ export declare class PointCloudMaterial extends RawShaderMaterial {
     clearVisibleNodeTextureOffsets(): void;
     updateShaderSource(): void;
     applyDefines(shaderSrc: string): string;
-    private recomputeHasPerClipVolumeModes;
+    private static encodeClipVolumeMode;
+    private updateClipBoxModesUniform;
+    private updateClipSphereModesUniform;
     setClipBoxes(clipBoxes: IClipBox[]): void;
     setClipSpheres(clipSpheres: IClipSphere[]): void;
+    setClipBoxMode(index: number, mode?: ClipVolumeMode): void;
+    setClipSphereMode(index: number, mode?: ClipVolumeMode): void;
     /**
      * Syncs inherited `clippingPlanes` to internal shader uniforms.
      * Called automatically each frame from `updateMaterial()`.

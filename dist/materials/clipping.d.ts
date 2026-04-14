@@ -10,9 +10,10 @@ export interface IClipSphere {
  *
  * @param center - The center position of the clip sphere in world space. Defaults to the origin.
  * @param radius - The radius of the clip sphere.
+ * @param mode - Optional per-volume mode (`include` or `exclude`). Defaults to undefined (inherit global mode).
  * @returns An IClipSphere object ready to be passed to PointCloudMaterial.setClipSpheres().
  */
-export declare function createClipSphere(center: Vector3, radius: number): IClipSphere;
+export declare function createClipSphere(center: Vector3, radius: number, mode?: ClipVolumeMode): IClipSphere;
 export declare enum ClipMode {
     DISABLED = 0,
     CLIP_OUTSIDE = 1,
@@ -35,6 +36,7 @@ export interface IClipBox {
  *
  * @param size - The dimensions of the clip box.
  * @param position - The center position of the clip box in world space. Defaults to the origin.
+ * @param mode - Optional per-volume mode (`include` or `exclude`). Defaults to undefined (inherit global mode).
  * @returns An IClipBox object ready to be passed to PointCloudMaterial.setClipBoxes().
  */
-export declare function createClipBox(size: Vector3, position?: Vector3): IClipBox;
+export declare function createClipBox(size: Vector3, position?: Vector3, mode?: ClipVolumeMode): IClipBox;
