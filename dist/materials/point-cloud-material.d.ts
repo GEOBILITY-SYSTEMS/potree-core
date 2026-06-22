@@ -1,4 +1,4 @@
-import { BufferGeometry, Camera, Color, Material, RawShaderMaterial, Scene, Texture, Vector3, Vector4, WebGLRenderer } from 'three';
+import { BufferGeometry, Camera, Color, DataTexture, Material, RawShaderMaterial, Scene, Texture, Vector3, Vector4, WebGLRenderer } from 'three';
 import { PointCloudOctree } from '../point-cloud-octree';
 import { PointCloudOctreeNode } from '../point-cloud-octree-node';
 import { ClipMode, ClipVolumeMode, IClipBox, IClipSphere } from './clipping';
@@ -194,7 +194,7 @@ export declare class PointCloudMaterial extends RawShaderMaterial {
     numClipSpheres: number;
     clipSpheres: IClipSphere[];
     private numClipPlanes;
-    visibleNodesTexture: Texture | undefined;
+    visibleNodesTexture: DataTexture | undefined;
     private visibleNodeTextureOffsets;
     private _gradient;
     private gradientTexture;
@@ -275,6 +275,7 @@ export declare class PointCloudMaterial extends RawShaderMaterial {
     inputColorEncoding: ColorEncoding;
     outputColorEncoding: ColorEncoding;
     private useLogDepth;
+    private useReversedDepth;
     attributes: {
         position: {
             type: string;

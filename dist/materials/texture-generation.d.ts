@@ -1,4 +1,4 @@
-import { Color, Texture } from 'three';
+import { Color, DataTexture, Texture } from 'three';
 import { IClassification, IGradient } from '../materials/types';
 /**
  * Generates a texture from a color.
@@ -8,7 +8,7 @@ import { IClassification, IGradient } from '../materials/types';
  * @param color - The color of the texture.
  * @returns The generated texture.
  */
-export declare function generateDataTexture(width: number, height: number, color: Color): Texture;
+export declare function generateDataTexture(width: number, height: number, color: Color): DataTexture;
 /**
  * Generates a texture from a gradient.
  *
