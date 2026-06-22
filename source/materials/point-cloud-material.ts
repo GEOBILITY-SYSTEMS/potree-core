@@ -4,6 +4,7 @@ import {
 	BufferGeometry,
 	Camera,
 	Color,
+	DataTexture,
 	DirectionalLight,
 	GLSL3,
 	LessEqualDepth,
@@ -313,7 +314,7 @@ export class PointCloudMaterial extends RawShaderMaterial
 
 	private numClipPlanes: number = 0;
 
-	visibleNodesTexture: Texture | undefined;
+	visibleNodesTexture: DataTexture | undefined;
 
 	private visibleNodeTextureOffsets = new Map<string, number>();
 
@@ -543,6 +544,8 @@ export class PointCloudMaterial extends RawShaderMaterial
 
   @requiresShaderUpdate() private useLogDepth: boolean = false;
 
+  @requiresShaderUpdate() private useReversedDepth: boolean = false;
+
   attributes = {
   	position: {type: 'fv', value: []},
   	color: {type: 'fv', value: []},
@@ -575,9 +578,10 @@ export class PointCloudMaterial extends RawShaderMaterial
 
   	this.classification = DEFAULT_CLASSIFICATION;
 
-  	this.defaultAttributeValues.normal = [0, 0, 0];
-  	this.defaultAttributeValues.classification = [0, 0, 0];
-  	this.defaultAttributeValues.indices = [0, 0, 0, 0];
+	const defaultAttributeValues = this.defaultAttributeValues as Record<string, number[]>;
+	defaultAttributeValues.normal = [0, 0, 0];
+	defaultAttributeValues.classification = [0, 0, 0];
+	defaultAttributeValues.indices = [0, 0, 0, 0];
 
   	this.vertexColors = true;
 	
@@ -702,6 +706,11 @@ export class PointCloudMaterial extends RawShaderMaterial
 	if (this.useLogDepth) 
 	{
 		define('use_log_depth');
+	}
+
+	if (this.useReversedDepth)
+	{
+		define('use_reversed_depth');
 	}
 
   	if (this.weighted) 
@@ -1018,7 +1027,14 @@ export class PointCloudMaterial extends RawShaderMaterial
 
 	this.syncClippingPlanes();
 
-	this.useLogDepth = renderer.capabilities.logarithmicDepthBuffer;
+	const capabilities = renderer.capabilities as typeof renderer.capabilities & {
+		reversedDepthBuffer?: boolean;
+		reverseDepthBuffer?: boolean;
+	};
+	const useReversedDepth = capabilities.reversedDepthBuffer === true || capabilities.reverseDepthBuffer === true;
+
+	this.useReversedDepth = useReversedDepth;
+	this.useLogDepth = renderer.capabilities.logarithmicDepthBuffer && !useReversedDepth;
 	octree.updateMatrixWorld(true);
 	this.updateElevationProjectionParams(octree);
 
@@ -1159,7 +1175,7 @@ export class PointCloudMaterial extends RawShaderMaterial
   	}
 
   	const texture = this.visibleNodesTexture;
-  	if (texture) 
+		if (texture && texture.image.data)
   	{
   		texture.image.data.set(data);
   		texture.needsUpdate = true;

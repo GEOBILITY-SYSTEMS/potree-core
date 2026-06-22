@@ -18,7 +18,7 @@ import {isBrowser} from '../utils/utils';
  * @param color - The color of the texture.
  * @returns The generated texture.
  */
-export function generateDataTexture(width: number, height: number, color: Color): Texture 
+export function generateDataTexture(width: number, height: number, color: Color): DataTexture
 {
 	const size = width * height;
 	const data = new Uint8Array(4 * size);

@@ -166,7 +166,8 @@ document.body.onload = function () {
 	const renderer = new WebGLRenderer({
 		canvas: canvas,
 		alpha: true,
-		logarithmicDepthBuffer: true,
+		// logarithmicDepthBuffer: true,
+		reversedDepthBuffer: true,
 		precision: 'highp',
 		premultipliedAlpha: true,
 		antialias: true,
@@ -197,7 +198,7 @@ document.body.onload = function () {
 	transformControls.addEventListener('dragging-changed', (event) => {
 		controls.enabled = !event.value;
 	});
-	scene.add(transformControls);
+	scene.add(transformControls.getHelper());
 
 	const raycaster = new Raycaster();
 	// @ts-ignore
@@ -406,13 +407,13 @@ document.body.onload = function () {
 		controls = new OrbitControls(camera, canvas);
 
 		const wasAttached = transformControls.object;
-		scene.remove(transformControls);
+		scene.remove(transformControls.getHelper());
 		transformControls.dispose();
 		transformControls = new TransformControls(camera, canvas);
 		transformControls.addEventListener('dragging-changed', (event) => {
 			controls.enabled = !event.value;
 		});
-		scene.add(transformControls);
+		scene.add(transformControls.getHelper());
 		if (wasAttached) transformControls.attach(wasAttached);
 
 		viewHelper = new ViewHelper(camera, canvas);
