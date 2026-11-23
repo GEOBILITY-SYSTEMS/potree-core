@@ -26,7 +26,10 @@ uniform vec3 pointLightPositions[MAX_POINT_LIGHTS];
 uniform vec3 pointLightColors[MAX_POINT_LIGHTS];
 uniform float pointLightRanges[MAX_POINT_LIGHTS];
 
-out vec4 fragColor;
+layout(location = 0) out vec4 fragColor;
+#ifdef closed_point_shape
+	layout(location = 1) out vec4 fragNormalDepth;
+#endif
 
 #ifdef highlight_point
 	// Color used to highlight a point
@@ -53,7 +56,7 @@ in vec3 vViewPosition;
 	in float vRadius;
 #endif
 
-#if defined(color_type_phong)
+#if defined(closed_point_shape) || defined(color_type_phong)
 	// Normal for Phong shading
 	in vec3 vNormal;
 #endif
@@ -165,24 +168,34 @@ void main() {
 
 	float linearDepth = -pos.z;
 	vec4 clipPos = projectionMatrix * pos;
-	float fragmentDepth;
-
-	#if defined(use_log_depth)
-		// Three.js does not use logarithmic depth for orthographic cameras,
-		// so orthographic rendering falls back to the standard depth mapping.
-		fragmentDepth = useOrthographicCamera
-			? (0.5 * (clipPos.z / clipPos.w) + 0.5)
-			: (log2(linearDepth + 1.0) * log(2.0) / log(far + 1.0));
-	#elif defined(use_reversed_depth)
-		// Recompute depth from the adjusted fragment position so paraboloid sprites
-		// depth-test using their curved surface instead of the point center.
-		fragmentDepth = clipPos.z / clipPos.w;
-	#else
-		// Standard hyperbolic depth buffer mapping from NDC [-1, 1] to [0, 1].
-		fragmentDepth = 0.5 * (clipPos.z / clipPos.w) + 0.5;
+	#ifdef closed_point_shape
+		// Positive view depth is the occupancy mask; opacity is independent of it.
+		#ifndef color_type_point_index
+			if (vOpacity <= 0.0) discard;
+		#endif
+		fragNormalDepth = vec4(vNormal, linearDepth);
 	#endif
 
-	gl_FragDepth = fragmentDepth;
+	#if defined(paraboloid_point_shape) || defined(use_log_depth) || defined(use_reversed_depth)
+		float fragmentDepth;
+
+		#if defined(use_log_depth)
+			// Three.js does not use logarithmic depth for orthographic cameras,
+			// so orthographic rendering falls back to the standard depth mapping.
+			fragmentDepth = useOrthographicCamera
+				? (0.5 * (clipPos.z / clipPos.w) + 0.5)
+				: (log2(linearDepth + 1.0) * log(2.0) / log(far + 1.0));
+		#elif defined(use_reversed_depth)
+			// Recompute depth from the adjusted fragment position so paraboloid sprites
+			// depth-test using their curved surface instead of the point center.
+			fragmentDepth = clipPos.z / clipPos.w;
+		#else
+			// Standard hyperbolic depth buffer mapping from NDC [-1, 1] to [0, 1].
+			fragmentDepth = 0.5 * (clipPos.z / clipPos.w) + 0.5;
+		#endif
+
+		gl_FragDepth = fragmentDepth;
+	#endif
 
 	#if defined(color_type_depth)
 		// Stable near->far coloring (near=purple, far=yellow)

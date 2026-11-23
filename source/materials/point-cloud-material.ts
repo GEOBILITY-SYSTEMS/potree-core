@@ -16,7 +16,7 @@ import {
 	PerspectiveCamera,
 	PointLight,
 	RawShaderMaterial,
-	Scene,
+	Object3D,
 	Texture,
 	Vector3,
 	Vector4,
@@ -245,7 +245,8 @@ const OPACITY_DEFS = {
 const SHAPE_DEFS = {
 	[PointShape.SQUARE]: 'square_point_shape',
 	[PointShape.CIRCLE]: 'circle_point_shape',
-	[PointShape.PARABOLOID]: 'paraboloid_point_shape'
+	[PointShape.PARABOLOID]: 'paraboloid_point_shape',
+	[PointShape.CLOSED]: 'closed_point_shape'
 };
 
 const COLOR_DEFS = {
@@ -634,7 +635,7 @@ export class PointCloudMaterial extends RawShaderMaterial
   	this.vertexShader = this.applyDefines(VertShader);
   	this.fragmentShader = this.applyDefines(FragShader);
 
-  	if (this.opacity === 1.0) 
+	if (this.opacity === 1.0 || this.shape === PointShape.CLOSED)
   	{
   		this.blending = NoBlending;
   		this.transparent = false;
@@ -650,7 +651,7 @@ export class PointCloudMaterial extends RawShaderMaterial
   		this.depthWrite = true;
   	}
 
-  	if (this.weighted) 
+	if (this.weighted && this.shape !== PointShape.CLOSED)
   	{
   		this.blending = AdditiveBlending;
   		this.transparent = true;
@@ -698,7 +699,7 @@ export class PointCloudMaterial extends RawShaderMaterial
   		define('use_filter_by_normal');
   	}
 
-  	if (this.useEDL) 
+	if (this.useEDL && this.shape !== PointShape.CLOSED)
   	{
   		define('use_edl');
   	}
@@ -713,7 +714,7 @@ export class PointCloudMaterial extends RawShaderMaterial
 		define('use_reversed_depth');
 	}
 
-  	if (this.weighted) 
+	if (this.weighted && this.shape !== PointShape.CLOSED)
   	{
   		define('weighted_splats');
   	}
@@ -897,13 +898,14 @@ export class PointCloudMaterial extends RawShaderMaterial
 		const count = (planes && planes.length) ? planes.length : 0;
 
 		const doUpdate = (this.numClipPlanes === 0) !== (count === 0);
+
+		this.numClipPlanes = count;
+		this.setUniform('clipPlaneCount', count);
+
 		if (doUpdate)
 		{
 			this.updateShaderSource();
 		}
-
-		this.numClipPlanes = count;
-		this.setUniform('clipPlaneCount', count);
 
 		if (count > 0 && planes)
 		{
@@ -1077,7 +1079,7 @@ export class PointCloudMaterial extends RawShaderMaterial
 	}
 
   	if (
-  		this.pointSizeType === PointSizeType.ADAPTIVE ||
+		(this.shape !== PointShape.CLOSED && this.pointSizeType === PointSizeType.ADAPTIVE) ||
 	  this.pointColorType === PointColorType.LOD
   	) 
   	{
@@ -1190,14 +1192,19 @@ export class PointCloudMaterial extends RawShaderMaterial
   {
   	return (
   		_renderer: WebGLRenderer,
-  		_scene: Scene,
+		_scene: Object3D,
   		_camera: Camera,
   		_geometry: BufferGeometry,
   		material: Material,
   	) => 
   	{
 			if (material instanceof PointCloudMaterial) {
-				material.updateLightUniforms(_renderer, _scene, _camera);
+				let lightRoot = _scene;
+				if (lightRoot === octree && material.pointColorType === PointColorType.PHONG)
+				{
+					while (lightRoot.parent) lightRoot = lightRoot.parent;
+				}
+				material.updateLightUniforms(_renderer, lightRoot, _camera);
 
 				const materialUniforms = material.uniforms;
 
@@ -1221,7 +1228,7 @@ export class PointCloudMaterial extends RawShaderMaterial
 
 	private updateLightUniforms(
 		renderer: WebGLRenderer,
-		scene: Scene,
+		scene: Object3D,
 		camera: Camera,
 	): void
 	{

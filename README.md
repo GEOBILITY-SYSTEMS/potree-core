@@ -13,6 +13,10 @@
 ## Demo
  - Live demo at https://tentone.github.io/potree-core/
  - Double click the models to raycast the scene and create marker points.
+ - See the [interactive example source](example/main.ts) and [build configuration](webpack.example.js).
+ - Run `npm install`, then `npm start` to open the development demo at http://localhost:5200.
+ - Run `npm run build:example` from the repository root to build the example into `build/`, including `index.html`, the bundled code, and point-cloud data. Serve that directory over HTTP at the server root with support for byte-range requests.
+ - The Points panel controls point size, shape (`PointShape`), opacity type (`PointOpacityType`), and color type (`PointColorType`).
 
 <img src="https://raw.githubusercontent.com/tentone/potree-core/master/screenshot.png" width="700">
 
@@ -44,7 +48,7 @@ const pointClouds = [];
 
 const baseUrl = "data/test/";
 const potree = new Potree();
-potree.loadPointCloud("cloud.js", url => `${baseUrl}${url}`,).then(function(pco) {
+potree.loadPointCloud("cloud.js", baseUrl).then(function(pco) {
    scene.add(pco);
 	pointClouds.push(pco);
 });
@@ -60,6 +64,41 @@ function loop()
 };
 loop();
 ```
+
+## Closed point surfaces
+
+`PointShape.CLOSED` reconstructs small gaps between points with screen-space binary closing. Use `PotreeRenderer` to run its multiple passes:
+
+```typescript
+import { PointShape, PotreeRenderer } from 'potree-core';
+
+pco.material.shape = PointShape.CLOSED;
+const pointRenderer = new PotreeRenderer({
+	closed: { radius: 2, depthThreshold: 0.02 },
+	edl: { enabled: false },
+});
+
+// Each animation frame:
+pointRenderer.updateAndRender(potree, pointClouds, camera, renderer, scene);
+
+// Change settings at runtime:
+pointRenderer.setClosed({ radius: 3 });
+
+// When finished (clouds and the three.js renderer remain caller-owned):
+pointRenderer.dispose();
+```
+
+- Each cloud first renders depth-tested **one-physical-pixel samples**, independently of point size, size type, min/max size, highlight scale, and device pixel ratio. Calling `renderer.render()` directly displays only these samples; closing requires `PotreeRenderer`.
+- A square kernel dilates the binary occupancy mask, then erodes it with the same kernel. `radius` defaults to **2 physical pixels**, rounds to an integer, and clamps to **1–4**. Larger radii fill larger gaps and cost more GPU time. Viewport padding preserves samples at image boundaries.
+- Original samples keep their attributes. New pixels interpolate color, opacity, positive view-space depth, and view-space normals with inverse squared pixel-distance weights. Only samples within `depthThreshold` of the closest depth contribute; the default **0.02** means 2% of that depth. The tolerance is nonnegative and does not change the binary mask. Separate clouds never interpolate together.
+- Normals are transformed with the normal matrix and renormalized after interpolation. `PointColorType.NORMAL` displays them as view-space RGB (`normal * 0.5 + 0.5`). If a cloud lacks normals, this mode estimates them from neighbouring reconstructed depths, falling back to a camera-facing normal for isolated points.
+- Reconstructed pixels obey clipping and write interpolated depth, so ordinary meshes can occlude the surface. Perspective, orthographic, logarithmic depth, render targets, and optional EDL are supported. EDL is evaluated separately for each reconstructed cloud.
+- This is a view-dependent surface approximation: large gaps remain open, and overlapping depth layers can still produce artifacts. Transparency composites the nearest surface with normal alpha blending; weighted splatting is bypassed. Picking continues to return original points, not synthetic surface pixels.
+- Requires **WebGL2 and `EXT_color_buffer_float`**; an unsupported context throws an explicit error. Four RGBA32F attribute textures, an R8 mask, and a depth buffer are reused between clouds (roughly 137 MiB at 1920×1080, plus padding and any EDL target). Release them with `PotreeRenderer.dispose()`.
+
+Select **Closed** in the demo's **Points → Shape** control. **Closing Radius (px)** and **Closing Depth Tolerance** adjust reconstruction.
+
+Run `npm run build` followed by `node tests/run-browser-checks.mjs` for the Chromium GPU regression checks. Set `BROWSER_PATH` if Chromium is installed outside the detected paths. The checks compare the GPU mask against a binary morphology reference, exercise interpolation, depth, clipping and renderer state, and load both bundled cloud formats. Preview images and results are written to `build/browser-checks/`. To also exercise the demo, first run `npm run build:example`, then set `CHECK_DEMO=1` when running the checks.
 
 ## Clip Boxes
  - Clip boxes restrict the rendered region of a point cloud to a box-shaped volume.
@@ -134,7 +173,7 @@ pco.material.setClipSpheres([sphereA, sphereB]);
 
 ## Notes
  - Since potree-core is meant to be used as library and not as a full software as potree some features are not available.
- - EDL shading is not supported by potree core.
+ - EDL shading is available through `PotreeRenderer` with `edl: {enabled: true}`, see `example/main.ts`.
  - Removed Arena 4D point cloud support.
  - Removed Entwine Point Tile file support.
  - GUI elements were removed from the library
@@ -144,7 +183,7 @@ pco.material.setClipSpheres([sphereA, sphereB]);
    - Potree.startQuery, Potree.endQuery and Potree.resolveQueries
    - Potree.timerQueries
    - Potree.MOUSE, Potree.CameraMode
-   - PotreeRenderer, RepRenderer, Potree.Renderer
+   - RepRenderer, Potree.Renderer
      - JQuery, TWEEN and Proj4 dependencies
 
 

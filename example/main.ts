@@ -1,9 +1,9 @@
-import { AmbientLight, BoxGeometry, Clock, Euler, Mesh, MeshBasicMaterial, OrthographicCamera, PerspectiveCamera, Plane, PlaneHelper, Raycaster, Scene, SphereGeometry, Vector2, Vector3, WebGLRenderer } from 'three';
+import { AmbientLight, BoxGeometry, Clock, Euler, Mesh, MeshBasicMaterial, Object3D, OrthographicCamera, PerspectiveCamera, Plane, PlaneHelper, Raycaster, Scene, SphereGeometry, Vector2, Vector3, WebGLRenderer } from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls';
 import { ViewHelper } from 'three/examples/jsm/helpers/ViewHelper';
 import { GUI } from 'three/examples/jsm/libs/lil-gui.module.min.js';
-import { ClipMode, ClipVolumeMode, PointCloudOctree, PointSizeType, Potree, PotreeRenderer, createClipBox, createClipSphere } from '../source';
+import { ClipMode, ClipVolumeMode, PointCloudOctree, PointColorType, PointOpacityType, PointShape, PointSizeType, Potree, PotreeRenderer, createClipBox, createClipSphere } from '../source';
 
 document.body.onload = function () {
 	const potree = new Potree();
@@ -123,6 +123,11 @@ document.body.onload = function () {
 		// Points
 		pointSize: 1.0,
 		sizeType: 'Adaptive',
+		pointShape: PointShape.PARABOLOID,
+		closingRadius: 2,
+		closingDepthThreshold: 0.02,
+		pointOpacityType: PointOpacityType.FIXED,
+		pointColorType: PointColorType.RGB,
 		// Transform
 		transformMode: 'translate',
 		// Pick
@@ -163,7 +168,7 @@ document.body.onload = function () {
 	canvas.style.height = '100%';
 	document.body.appendChild(canvas);
 
-	const renderer = new WebGLRenderer({
+	const rendererOptions = {
 		canvas: canvas,
 		alpha: true,
 		// logarithmicDepthBuffer: true,
@@ -173,7 +178,8 @@ document.body.onload = function () {
 		antialias: true,
 		preserveDrawingBuffer: false,
 		powerPreference: 'high-performance',
-	});
+	} as const;
+	const renderer = new WebGLRenderer(rendererOptions);
 
 	const cube = new Mesh(new BoxGeometry(25, 1, 25), new MeshBasicMaterial({ color: 0x44AA44 }));
 	cube.position.y = -2;
@@ -195,10 +201,15 @@ document.body.onload = function () {
 	let controls = new OrbitControls(camera, canvas);
 
 	let transformControls = new TransformControls(camera, canvas);
+	const transformHelper = (): Object3D => {
+		if ('getHelper' in transformControls && typeof transformControls.getHelper === 'function')
+			return transformControls.getHelper();
+		return transformControls as unknown as Object3D;
+	};
 	transformControls.addEventListener('dragging-changed', (event) => {
 		controls.enabled = !event.value;
 	});
-	scene.add(transformControls.getHelper());
+	scene.add(transformHelper());
 
 	const raycaster = new Raycaster();
 	// @ts-ignore
@@ -276,7 +287,9 @@ document.body.onload = function () {
 			};
 			pco.material.size = params.pointSize;
 			pco.material.pointSizeType = sizeTypeMap[params.sizeType] ?? PointSizeType.ADAPTIVE;
-			pco.material.shape = 2;
+			pco.material.shape = params.pointShape;
+			pco.material.pointOpacityType = params.pointOpacityType;
+			pco.material.pointColorType = params.pointColorType;
 			pco.material.inputColorEncoding = 1;
 			pco.material.outputColorEncoding = 1;
 
@@ -407,13 +420,13 @@ document.body.onload = function () {
 		controls = new OrbitControls(camera, canvas);
 
 		const wasAttached = transformControls.object;
-		scene.remove(transformControls.getHelper());
+		scene.remove(transformHelper());
 		transformControls.dispose();
 		transformControls = new TransformControls(camera, canvas);
 		transformControls.addEventListener('dragging-changed', (event) => {
 			controls.enabled = !event.value;
 		});
-		scene.add(transformControls.getHelper());
+		scene.add(transformHelper());
 		if (wasAttached) transformControls.attach(wasAttached);
 
 		viewHelper = new ViewHelper(camera, canvas);
@@ -478,6 +491,60 @@ document.body.onload = function () {
 		for (const pco of pointClouds) pco.material.pointSizeType = map[v];
 	});
 
+	pointsFolder.add(params, 'pointShape', {
+		'Square': PointShape.SQUARE,
+		'Circle': PointShape.CIRCLE,
+		'Paraboloid': PointShape.PARABOLOID,
+		'Closed': PointShape.CLOSED
+	}).name('Shape').onChange((shape: PointShape) =>
+	{
+		for (const pco of pointClouds)
+		{
+			pco.material.shape = shape;
+		}
+	});
+	pointsFolder.add(params, 'closingRadius', 1, 20, 1).name('Closing Radius (px)').onChange((radius: number) =>
+	{
+		potreeRenderer.setClosed({ radius });
+	});
+	pointsFolder.add(params, 'closingDepthThreshold', 0, 0.5, 0.005).name('Closing Depth Tolerance').onChange((depthThreshold: number) =>
+	{
+		potreeRenderer.setClosed({ depthThreshold });
+	});
+	pointsFolder.add(params, 'pointOpacityType', {
+		'Fixed': PointOpacityType.FIXED,
+		'Attenuated': PointOpacityType.ATTENUATED
+	}).name('Opacity Type').onChange((opacityType: PointOpacityType) =>
+	{
+		for (const pco of pointClouds)
+		{
+			pco.material.pointOpacityType = opacityType;
+		}
+	});
+	pointsFolder.add(params, 'pointColorType', {
+		'RGB': PointColorType.RGB,
+		'Color': PointColorType.COLOR,
+		'Depth': PointColorType.DEPTH,
+		'Height': PointColorType.HEIGHT,
+		'Intensity': PointColorType.INTENSITY,
+		'Intensity Gradient': PointColorType.INTENSITY_GRADIENT,
+		'Level of Detail': PointColorType.LOD,
+		'Point Index': PointColorType.POINT_INDEX,
+		'Classification': PointColorType.CLASSIFICATION,
+		'Return Number': PointColorType.RETURN_NUMBER,
+		'Source': PointColorType.SOURCE,
+		'Normal': PointColorType.NORMAL,
+		'Phong': PointColorType.PHONG,
+		'RGB Height': PointColorType.RGB_HEIGHT,
+		'Composite': PointColorType.COMPOSITE
+	}).name('Color Type').onChange((colorType: PointColorType) =>
+	{
+		for (const pco of pointClouds)
+		{
+			pco.material.pointColorType = colorType;
+		}
+	});
+
 	// Interaction folder
 	const interactionFolder = gui.addFolder('Interaction');
 	interactionFolder.add(params, 'transformMode', ['translate', 'rotate', 'scale']).name('Transform').onChange((v: string) => {
@@ -498,11 +565,7 @@ document.body.onload = function () {
 		// As a result, we must clear manually at the start of each frame.
 		renderer.clear();
 
-		if (!params.edlEnabled) {
-			renderer.render(scene, camera);
-		} else {
-			potreeRenderer.render({ renderer, scene, camera, pointClouds });
-		}
+		potreeRenderer.render({ renderer, scene, camera, pointClouds });
 
 		// Render ViewHelper
 		viewHelper.render(renderer);

@@ -125,7 +125,7 @@ out vec3 vViewPosition;
 	out float vRadius;
 #endif
 
-#if defined(color_type_phong)
+#if defined(closed_point_shape) || defined(color_type_phong)
 	out vec3 vNormal;
 #endif
 
@@ -324,11 +324,11 @@ vec3 getCompositeColor() {
 
 vec3 fromLinear(vec3 linearRGB) {
 	bvec3 cutoff = lessThan(linearRGB, vec3(0.0031308));
-	return mix(linearRGB * vec3(12.92), vec3(1.055) * pow(linearRGB, vec3(1.0/2.4)) - vec3(0.055), cutoff);
+	return mix(vec3(1.055) * pow(linearRGB, vec3(1.0/2.4)) - vec3(0.055), linearRGB * vec3(12.92), cutoff);
 }
 vec3 toLinear(vec3 sRGB) {
 	bvec3 cutoff = lessThan(sRGB, vec3(0.04045));
-	return mix(sRGB/vec3(12.92), pow((sRGB + vec3(0.055))/vec3(1.055), vec3(2.4)), cutoff);
+	return mix(pow((sRGB + vec3(0.055))/vec3(1.055), vec3(2.4)), sRGB/vec3(12.92), cutoff);
 }
 
 void main() {
@@ -341,8 +341,9 @@ void main() {
 		vLinearDepth = gl_Position.w;
 	#endif
 
-	#if defined(color_type_phong)
-		vNormal = normalize(normalMatrix * normal);
+	#if defined(closed_point_shape) || defined(color_type_phong)
+		vec3 transformedNormal = normalMatrix * normal;
+		vNormal = transformedNormal / max(length(transformedNormal), 1e-8);
 	#endif
 
 	// EDL alpha (log2(linearDepth)) is written in the fragment shader so it can
@@ -350,13 +351,14 @@ void main() {
 
 
 	// POINT SIZE COMPUTATION
+	float pointSize = 1.0;
+	#ifndef closed_point_shape
 	float tanHalfFOV = tan(fov * 0.5);
 	float projFactor = -0.5 * screenHeight / (tanHalfFOV * mvPosition.z);
 	// Scale compensation based on transformation difference 
 	float scale = length(modelViewMatrix * vec4(0, 0, 0, 1) - modelViewMatrix * vec4(spacing, 0, 0, 1)) / spacing;
 	projFactor *= scale;
 	
-	float pointSize = 1.0;
 	#if defined fixed_point_size
 		pointSize = size;
 	#elif defined attenuated_point_size
@@ -376,6 +378,7 @@ void main() {
 	#endif
 	
 	pointSize *= viewScale;
+	#endif
 	gl_PointSize = pointSize;
 
 
@@ -393,6 +396,12 @@ void main() {
 		}
 	#endif
 
+
+	// Closing starts from exactly one physical pixel, including camera view offsets
+	// and highlighting. Its footprint is controlled by the closing radius instead.
+	#ifdef closed_point_shape
+		gl_PointSize = 1.0;
+	#endif
 
 	// OPACITY
 	#ifndef color_type_point_index
@@ -555,7 +564,7 @@ void main() {
 				#endif
 			#endif
 
-			if (!visible) { gl_Position = vec4(1000.0); }
+			if (!visible) { gl_Position = vec4(100.0, 100.0, 100.0, 1.0); }
 
 			if (insideAnyHighlight) { vColor.r += 0.5; }
 		#endif
@@ -564,10 +573,10 @@ void main() {
 
 	// COLOR ENCODING ADJUSTMENTS
 	#if defined(output_color_encoding_sRGB) && defined(input_color_encoding_linear) && !defined(color_type_point_index)
-		vColor = toLinear(vColor);
+		vColor = fromLinear(vColor);
 	#endif
 
 	#if defined(output_color_encoding_linear) && defined(input_color_encoding_sRGB) && !defined(color_type_point_index)
-		vColor = fromLinear(vColor);
+		vColor = toLinear(vColor);
 	#endif
 }
