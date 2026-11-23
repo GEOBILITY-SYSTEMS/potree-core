@@ -67,6 +67,8 @@ loop();
 
 ## Closed point surfaces
 
+Set `pco.material.outputPointCenter = true` to write each point's view-space center to a second color attachment during its normal draw. Bind an `RGBA32UI` texture at location 1, clear it to zero, and decode marked pixels (`w == 1u`) with `uintBitsToFloat(pixel.xyz)`. The option defaults to false. The CLOSED renderer uses that attachment for its own normal and depth data.
+
 `PointShape.CLOSED` reconstructs small gaps between points with screen-space binary closing. Use `PotreeRenderer` to run its multiple passes:
 
 ```typescript
