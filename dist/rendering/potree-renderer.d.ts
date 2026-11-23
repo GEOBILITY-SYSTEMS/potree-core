@@ -2,6 +2,8 @@ import { Camera, Object3D, WebGLRenderer } from 'three';
 import { PointCloudOctree } from '../point-cloud-octree';
 import { Potree } from '../potree';
 import { IVisibilityUpdateResult } from '../types';
+import { ClosedPointOptions } from './closed-point-pass';
+export type { ClosedPointOptions } from './closed-point-pass';
 /**
  * Configuration for Eye-Dome Lighting (EDL) rendering.
  *
@@ -24,6 +26,8 @@ export type PotreeRendererEDLOptions = {
  */
 export type PotreeRendererOptions = {
     edl?: PotreeRendererEDLOptions;
+    /** Reconstruction settings for clouds using PointShape.CLOSED. */
+    closed?: ClosedPointOptions;
 };
 /**
  * Parameters required to render a frame.
@@ -46,6 +50,9 @@ export type PotreeRendererRenderParams = {
  * `PotreeRenderer` keeps that wiring in one place while preserving backward compatibility.
  */
 export declare class PotreeRenderer {
+    private closedPass;
+    private closedOptions;
+    private closedClouds;
     private edlPass;
     private edlOptions;
     private lastPointClouds;
@@ -54,6 +61,12 @@ export declare class PotreeRenderer {
     constructor(options?: PotreeRendererOptions);
     /** Releases internally owned GPU resources (render targets). */
     dispose(): void;
+    /**
+     * Set the square closing radius (physical pixels) and relative depth tolerance.
+     *
+     * Missing settings retain their previous values. Defaults are radius 2 and tolerance 0.02.
+     */
+    setClosed(options: ClosedPointOptions): void;
     /**
      * Enables/disables EDL and updates EDL parameters.
      *
@@ -74,8 +87,11 @@ export declare class PotreeRenderer {
     /**
      * Renders a frame.
      *
-     * - EDL disabled: calls `renderer.render(scene, camera)`.
-     * - EDL enabled: runs the EDL multi-pass pipeline via {@link EDLPass}.
+     * CLOSED clouds are rasterized at one physical pixel, dilated, eroded and
+     * composited with interpolated color, view depth and normals. Each cloud is
+     * reconstructed separately. EDL, when enabled, shades the reconstructed surface.
+     * Requires WebGL2 with EXT_color_buffer_float for CLOSED; otherwise throws.
+     * Other shapes use the normal renderer or the EDL pipeline.
      */
     render(params: PotreeRendererRenderParams): void;
     /** Convenience helper: `updatePointClouds()` followed by {@link render}. */

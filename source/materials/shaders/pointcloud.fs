@@ -29,6 +29,8 @@ uniform float pointLightRanges[MAX_POINT_LIGHTS];
 layout(location = 0) out vec4 fragColor;
 #ifdef closed_point_shape
 	layout(location = 1) out vec4 fragNormalDepth;
+#elif defined(output_point_center)
+	layout(location = 1) out uvec4 pointCenter;
 #endif
 
 #ifdef highlight_point
@@ -85,6 +87,10 @@ void main() {
 	#if defined(weighted_splats)
 		vec2 uv = gl_FragCoord.xy / vec2(screenWidth, screenHeight);
 		if(vLinearDepth > texture(depthMap, uv).r + vRadius + blendDepthSupplement) discard;
+	#endif
+
+	#ifdef output_point_center
+		pointCenter = uvec4(floatBitsToUint(vViewPosition), 1u);
 	#endif
 
 	// Initialize fragment color and opacity

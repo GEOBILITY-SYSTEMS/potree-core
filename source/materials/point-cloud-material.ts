@@ -529,6 +529,9 @@ export class PointCloudMaterial extends RawShaderMaterial
 
   @requiresShaderUpdate() useEDL: boolean = false;
 
+	/** Write view-space point centers to RGBA32UI attachment 1. Defaults to false. CLOSED reserves this attachment. */
+	@requiresShaderUpdate() outputPointCenter: boolean = false;
+
   @requiresShaderUpdate() shape: PointShape = PointShape.SQUARE;
 
   @requiresShaderUpdate() treeType: TreeType = TreeType.OCTREE;
@@ -703,6 +706,11 @@ export class PointCloudMaterial extends RawShaderMaterial
   	{
   		define('use_edl');
   	}
+
+		if (this.outputPointCenter && this.shape !== PointShape.CLOSED)
+		{
+			define('output_point_center');
+		}
 
 	if (this.useLogDepth) 
 	{

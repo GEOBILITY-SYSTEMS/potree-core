@@ -6,7 +6,9 @@ export declare enum PointSizeType {
 export declare enum PointShape {
     SQUARE = 0,
     CIRCLE = 1,
-    PARABOLOID = 2
+    PARABOLOID = 2,
+    /** One-pixel samples reconstructed by binary closing in PotreeRenderer. */
+    CLOSED = 3
 }
 export declare enum TreeType {
     OCTREE = 0,

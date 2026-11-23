@@ -16,10 +16,9 @@ export declare class EDLPass {
     private rtTypeChecked;
     private edlMaterial;
     private screenPass;
-    private size;
+    private state;
     constructor();
     private ensureRenderTargetType;
     dispose(): void;
-    private resizeToRenderer;
     render(params: EDLPassParams): void;
 }

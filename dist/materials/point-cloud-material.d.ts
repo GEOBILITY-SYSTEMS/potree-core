@@ -1,4 +1,4 @@
-import { BufferGeometry, Camera, Color, DataTexture, Material, RawShaderMaterial, Scene, Texture, Vector3, Vector4, WebGLRenderer } from 'three';
+import { BufferGeometry, Camera, Color, DataTexture, Material, RawShaderMaterial, Object3D, Texture, Vector3, Vector4, WebGLRenderer } from 'three';
 import { PointCloudOctree } from '../point-cloud-octree';
 import { PointCloudOctreeNode } from '../point-cloud-octree-node';
 import { ClipMode, ClipVolumeMode, IClipBox, IClipSphere } from './clipping';
@@ -267,6 +267,8 @@ export declare class PointCloudMaterial extends RawShaderMaterial {
     pointSizeType: PointSizeType;
     clipMode: ClipMode;
     useEDL: boolean;
+    /** Write view-space point centers to RGBA32UI attachment 1. Defaults to false. CLOSED reserves this attachment. */
+    outputPointCenter: boolean;
     shape: PointShape;
     treeType: TreeType;
     pointOpacityType: PointOpacityType;
@@ -344,6 +346,6 @@ export declare class PointCloudMaterial extends RawShaderMaterial {
     updateMaterial(octree: PointCloudOctree, visibleNodes: PointCloudOctreeNode[], camera: Camera, renderer: WebGLRenderer): void;
     private updateElevationProjectionParams;
     private updateVisibilityTextureData;
-    static makeOnBeforeRender(octree: PointCloudOctree, node: PointCloudOctreeNode, pcIndex?: number): (_renderer: WebGLRenderer, _scene: Scene, _camera: Camera, _geometry: BufferGeometry, material: Material) => void;
+    static makeOnBeforeRender(octree: PointCloudOctree, node: PointCloudOctreeNode, pcIndex?: number): (_renderer: WebGLRenderer, _scene: Object3D, _camera: Camera, _geometry: BufferGeometry, material: Material) => void;
     private updateLightUniforms;
 }
